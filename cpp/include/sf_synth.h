@@ -11,6 +11,7 @@
 struct SF2Voice {
     bool active = false;
     bool releasing = false;
+    bool held = false;          // CC64 sustain hold
     int channel = 0;
     int note = -1;
     int velocity = 127;
@@ -34,6 +35,7 @@ struct SF2Voice {
     double filterFc = 13500.0;
     double filterQ = 0.7;
     double filterState = 0.0;
+    double vibratoDepth = 0.0;  // CC1 modulation depth (semitones)
 };
 
 struct ChannelState {
@@ -49,6 +51,14 @@ struct ChannelState {
     int reverb = 0;
     int chorus = 0;
     int delay = 0;
+    int breath = 0;
+    int foot = 0;
+    double fineTune = 0.0;    // RPN 1: ±100 cents
+    int coarseTune = 0;       // RPN 2: ±64 semitones
+    // RPN state
+    int rpnLSB = 127;  // 127 = no RPN selected
+    int rpnMSB = 127;
+    int rpnValue = 0;
 };
 
 struct ConvertOptions;
@@ -111,6 +121,7 @@ private:
     void processVoice(SF2Voice& v, float* left, float* right, int count);
 
     double getEffectivePitchBend(int channel);
+    double getEffectiveTuning(int channel);
     double timecentsToSeconds(int tc);
     double attenuateDb(double db);
 

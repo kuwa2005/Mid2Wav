@@ -223,16 +223,16 @@ void SFSynthesizer::buildPresetZones(int channel) {
 // ─────────────────────────── note resolution ─────────────────────
 
 bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZone& out) {
-    // ドラムマップ(bank=128)の場合は最も狭いkeyRangeのゾーンを優先
-    // メロディの場合は最初に一致したゾーンを使用
     bool isDrum = (m_channels[channel].bank == 128);
     int bestRange = isDrum ? 999 : 0;
+    int bestVelDist = 999;
     bool found = false;
 
     for (const auto& z : m_channelZones[channel]) {
         if (note < z.keyLow || note > z.keyHigh) continue;
         if (velocity < z.velLow || velocity > z.velHigh) continue;
         if (isDrum) {
+            // ドラム: 最も狭いkeyRangeを優先
             int range = z.keyHigh - z.keyLow;
             if (range < bestRange) {
                 bestRange = range;
@@ -240,8 +240,14 @@ bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZon
                 found = true;
             }
         } else {
-            out = z;
-            return true;
+            // メロディ: ベロシティ範囲の中心に最も近いゾーンを選択
+            int velCenter = (z.velLow + z.velHigh) / 2;
+            int velDist = std::abs(velocity - velCenter);
+            if (velDist < bestVelDist) {
+                bestVelDist = velDist;
+                out = z;
+                found = true;
+            }
         }
     }
     return found;
@@ -269,12 +275,13 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
             double noteFreq = 440.0 * std::pow(2.0, (note - 69) / 12.0);
             double rootFreq = 440.0 * std::pow(2.0, (zone.rootKey - 69) / 12.0);
             double pitchBend = getEffectivePitchBend(channel);
+            double tuning = getEffectiveTuning(channel);
             bool isDrumChannel = (m_channels[channel].bank == 128);
             if (isDrumChannel) {
                 // ドラム: サンプルを自然ピッチで再生（ノート番号は楽器選択のみ）
                 v.pitchRatio = zone.sampleRate / (double)m_sampleRate;
             } else {
-                v.pitchRatio = (noteFreq / rootFreq) * std::pow(2.0, pitchBend / 12.0)
+                v.pitchRatio = (noteFreq / rootFreq) * std::pow(2.0, (pitchBend + tuning) / 12.0)
                                * (zone.sampleRate / (double)m_sampleRate);
             }
 
@@ -302,6 +309,9 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
             v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
             v.filterQ = std::max(0.5, zone.filterQ);
             v.filterState = 0.0;
+
+            // Vibrato depth from modulation (CC1)
+            v.vibratoDepth = m_channels[channel].modulation / 127.0 * 2.0; // max 2 semitones
 
             return;
         }
@@ -348,8 +358,14 @@ void SFSynthesizer::noteOn(int channel, int note, int velocity) {
 void SFSynthesizer::noteOff(int channel, int note) {
     for (auto& v : m_voices) {
         if (v.active && v.channel == channel && v.note == note && !v.releasing) {
-            v.releasing = true;
-            v.releaseLevel = v.envLevel;
+            if (m_channels[channel].sustain >= 64) {
+                // サステインペダルON: ボイスを保持
+                v.held = true;
+            } else {
+                // サステインOFF: リリースへ
+                v.releasing = true;
+                v.releaseLevel = v.envLevel;
+            }
         }
     }
 }
@@ -369,13 +385,77 @@ void SFSynthesizer::controlChange(int channel, int cc, int value) {
     switch (cc) {
         case 0: ch.bank = value; break;
         case 1: ch.modulation = value; break;
+        case 2: ch.breath = value; break;
+        case 4: ch.foot = value; break;
         case 7: ch.volume = value; break;
         case 10: ch.pan = value; break;
         case 11: ch.expression = value; break;
-            case 64: ch.sustain = value; break;
-            case 91: ch.reverb = value; break;
-            case 93: ch.chorus = value; break;
-            case 94: ch.delay = value; break;
+        case 32: break; // Bank Select LSB
+        case 64: {
+            int prevSustain = ch.sustain;
+            ch.sustain = value;
+            // サステインOFF: 保持中のボイスをリリース
+            if (prevSustain >= 64 && value < 64) {
+                for (auto& v : m_voices) {
+                    if (v.active && v.channel == channel && v.held) {
+                        v.held = false;
+                        v.releasing = true;
+                        v.releaseLevel = v.envLevel;
+                    }
+                }
+            }
+            break;
+        }
+        case 65: break; // Portamento On/Off (未実装)
+        case 91: ch.reverb = value; break;
+        case 93: ch.chorus = value; break;
+        case 94: ch.delay = value; break;
+        case 98: ch.rpnLSB = value; break;  // NRPN LSB
+        case 99: ch.rpnMSB = value; break;  // NRPN MSB
+        case 100: ch.rpnLSB = value; break; // RPN LSB
+        case 101: ch.rpnMSB = value; break; // RPN MSB
+        case 106: {
+            ch.rpnValue = value; // Data Entry MSB
+            // RPN処理
+            if (ch.rpnMSB == 0 && ch.rpnLSB == 0) {
+                // RPN 0: Pitch Bend Sensitivity (0-24半音)
+                ch.pitchBendRange = std::clamp(value, 0, 24);
+            } else if (ch.rpnMSB == 0 && ch.rpnLSB == 1) {
+                // RPN 1: Channel Fine Tuning (0-16383, 中心=8192=0 cents)
+                // ピッチベンドに反映: fineTuning = (value - 8192) / 8192 * 100 cents
+                ch.fineTune = (value - 64) * 100.0 / 64.0; // ±100 cents
+            } else if (ch.rpnMSB == 0 && ch.rpnLSB == 2) {
+                // RPN 2: Channel Coarse Tuning (0-127, 中心=64=0半音)
+                ch.coarseTune = value - 64; // ±64半音
+            }
+            break;
+        }
+        case 38: break; // Data Entry LSB
+        case 96: break; // Data Increment
+        case 97: break; // Data Decrement
+        case 120: // All Sound Off
+            for (auto& v : m_voices) {
+                if (v.active && v.channel == channel) {
+                    v.active = false;
+                }
+            }
+            break;
+        case 121: // Reset All Controllers
+            ch.volume = 100; ch.expression = 127; ch.pan = 64;
+            ch.pitchBend = 8192; ch.pitchBendRange = 2;
+            ch.modulation = 0; ch.sustain = 0;
+            ch.reverb = 0; ch.chorus = 0; ch.delay = 0;
+            ch.rpnLSB = 127; ch.rpnMSB = 127; ch.rpnValue = 0;
+            break;
+        case 123: // All Notes Off
+            for (auto& v : m_voices) {
+                if (v.active && v.channel == channel) {
+                    v.held = false;
+                    v.releasing = true;
+                    v.releaseLevel = v.envLevel;
+                }
+            }
+            break;
         default: break;
     }
 }
@@ -391,10 +471,19 @@ double SFSynthesizer::getEffectivePitchBend(int channel) {
     return bend * ch.pitchBendRange;
 }
 
+double SFSynthesizer::getEffectiveTuning(int channel) {
+    if (channel >= 16) return 0;
+    const auto& ch = m_channels[channel];
+    return ch.fineTune / 100.0 + ch.coarseTune; // semitones
+}
+
 // ─────────────────────────── per-sample processing ───────────────
 
 void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int count) {
     if (!v.active) return;
+
+    bool isDrumChannel = (m_channels[v.channel].bank == 128);
+    double vibratoPhase = v.position; // for vibrato LFO
 
     // ── Envelope ──
     for (int i = 0; i < count; i++) {
@@ -462,7 +551,9 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         double envAmp = v.envLevel * v.amplitude;
         double chVol = m_channels[v.channel].volume / 127.0;
         double chExpr = m_channels[v.channel].expression / 127.0;
-        double vol = envAmp * chVol * chExpr;
+        double breathAmp = 0.5 + 0.5 * m_channels[v.channel].breath / 127.0; // 50-100%
+        double footAmp = 0.5 + 0.5 * m_channels[v.channel].foot / 127.0;     // 50-100%
+        double vol = envAmp * chVol * chExpr * breathAmp * footAmp;
 
         // Pan
         double panL = std::sqrt(0.5 * (1.0 - v.pan));
@@ -475,7 +566,11 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         if (std::isfinite(outR)) right[i] += (float)outR;
 
         // Advance
-        v.position += v.pitchRatio;
+        double vibratoShift = 0.0;
+        if (v.vibratoDepth > 0.0 && !isDrumChannel) {
+            vibratoShift = std::sin(v.position * 0.02) * v.vibratoDepth; // ~5Hz LFO
+        }
+        v.position += v.pitchRatio * std::pow(2.0, vibratoShift / 12.0);
     }
 }
 
