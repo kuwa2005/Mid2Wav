@@ -1,0 +1,20 @@
+# Build artifacts
+cpp/*.o
+cpp/Mid2Wav
+cpp/Mid2Wav_dbg
+
+# SoundFont files (too large for git)
+soundfonts/
+cpp/soundfonts/
+
+# Output WAV files
+output/
+
+# Temp files
+/tmp/
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
