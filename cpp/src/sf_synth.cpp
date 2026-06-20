@@ -308,7 +308,7 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
             // Filter
             v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
             v.filterQ = std::max(0.5, zone.filterQ);
-            v.filterState = 0.0;
+            std::fill(v.filterState, v.filterState + 4, 0.0);
 
             // Vibrato depth from modulation (CC1)
             v.vibratoDepth = m_channels[channel].modulation / 127.0 * 2.0; // max 2 semitones
@@ -316,8 +316,78 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
             return;
         }
     }
-    // No free voice — steal oldest (first active)
-    // (In practice MAX_VOICES=256 is plenty)
+    // No free voice — steal oldest released, then oldest active
+    uint32_t oldestAge = UINT32_MAX;
+    int stealIdx = -1;
+    for (int i = 0; i < (int)m_voices.size(); i++) {
+        auto& v = m_voices[i];
+        if (v.releasing && v.age < oldestAge) {
+            oldestAge = v.age;
+            stealIdx = i;
+        }
+    }
+    if (stealIdx < 0) {
+        // No releasing voices, steal oldest active
+        for (int i = 0; i < (int)m_voices.size(); i++) {
+            auto& v = m_voices[i];
+            if (v.active && v.age < oldestAge) {
+                oldestAge = v.age;
+                stealIdx = i;
+            }
+        }
+    }
+    if (stealIdx >= 0) {
+        m_voices[stealIdx].active = false; // Hard cut
+        // Re-enter the loop to find the now-free voice
+        for (auto& v : m_voices) {
+            if (!v.active) {
+                v.active = true;
+                v.releasing = false;
+                v.held = false;
+                v.channel = channel;
+                v.note = note;
+                v.velocity = velocity;
+                v.sampleIndex = zone.sampleIndex;
+                v.sampleStart = zone.sampleStart;
+                v.sampleEnd = zone.sampleEnd;
+                v.loopStart = zone.loopStart;
+                v.loopEnd = zone.loopEnd;
+                v.loop = zone.loop;
+                v.sampleRate = zone.sampleRate;
+                v.position = 0.0;
+                double noteFreq = 440.0 * std::pow(2.0, (note - 69) / 12.0);
+                double rootFreq = 440.0 * std::pow(2.0, (zone.rootKey - 69) / 12.0);
+                double pitchBend = getEffectivePitchBend(channel);
+                double tuning = getEffectiveTuning(channel);
+                bool isDrumChannel = (m_channels[channel].bank == 128);
+                if (isDrumChannel) {
+                    v.pitchRatio = zone.sampleRate / (double)m_sampleRate;
+                } else {
+                    v.pitchRatio = (noteFreq / rootFreq) * std::pow(2.0, (pitchBend + tuning) / 12.0)
+                                   * (zone.sampleRate / (double)m_sampleRate);
+                }
+                double velAmp = (double)velocity / 127.0;
+                double attenLin = attenuateDb(zone.attenuation);
+                v.amplitude = velAmp * attenLin;
+                double chPan = (m_channels[channel].pan - 64) / 64.0;
+                v.pan = std::clamp(zone.pan + chPan, -1.0, 1.0);
+                double aTime = std::max(zone.attack, 0.001);
+                double dTime = std::max(zone.decay, 0.001);
+                double rTime = std::max(zone.release, 0.001);
+                v.attackRate = 1.0 / (aTime * m_sampleRate);
+                v.decayRate = (1.0 - zone.sustain) / (dTime * m_sampleRate);
+                v.sustainLevel = std::clamp(zone.sustain, 0.0, 1.0);
+                v.releaseRate = 1.0 / (rTime * m_sampleRate);
+                v.envLevel = 0.0;
+                v.releaseLevel = 1.0;
+                v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
+                v.filterQ = std::max(0.5, zone.filterQ);
+                std::fill(v.filterState, v.filterState + 4, 0.0);
+                v.vibratoDepth = m_channels[channel].modulation / 127.0 * 2.0;
+                return;
+            }
+        }
+    }
 }
 
 // ─────────────────────────── MIDI events ─────────────────────────
@@ -351,7 +421,27 @@ void SFSynthesizer::noteOn(int channel, int note, int velocity) {
 
     ResolvedZone zone;
     if (resolveNote(channel, note, velocity, zone)) {
+        // Find previous voice on this channel for portamento
+        double prevPitchRatio = -1.0;
+        for (auto& v : m_voices) {
+            if (v.active && v.channel == channel && v.age > 0) {
+                prevPitchRatio = v.pitchRatio;
+            }
+        }
+
         startVoice(zone, channel, note, velocity);
+
+        // Setup portamento if enabled
+        const auto& ch = m_channels[channel];
+        if (ch.portamentoOn >= 64 && prevPitchRatio > 0 && ch.portamentoTime > 0) {
+            for (auto& v : m_voices) {
+                if (v.active && v.channel == channel && v.note == note) {
+                    v.basePitchRatio = prevPitchRatio;
+                    v.portamentoProgress = 0.0;
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -387,6 +477,7 @@ void SFSynthesizer::controlChange(int channel, int cc, int value) {
         case 1: ch.modulation = value; break;
         case 2: ch.breath = value; break;
         case 4: ch.foot = value; break;
+        case 5: ch.portamentoTime = value; break;
         case 7: ch.volume = value; break;
         case 10: ch.pan = value; break;
         case 11: ch.expression = value; break;
@@ -483,9 +574,12 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
     if (!v.active) return;
 
     bool isDrumChannel = (m_channels[v.channel].bank == 128);
-    double vibratoPhase = v.position; // for vibrato LFO
 
     // ── Envelope ──
+    // Update vibrato depth from CC1 (in case it changed mid-note)
+    if (!isDrumChannel) {
+        v.vibratoDepth = m_channels[v.channel].modulation / 127.0 * 2.0;
+    }
     for (int i = 0; i < count; i++) {
         if (!v.active) break;
 
@@ -527,24 +621,53 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         }
         if (idx < (int)v.sampleStart) { idx = (int)v.sampleStart; v.position = 0; }
 
-        // Linear interpolation
-        double frac = absPos - std::floor(absPos);
-        int idx1 = idx + 1;
-        if (idx1 >= (int)v.sampleEnd) idx1 = idx;
-
+        // Lanczos-2 interpolation (high quality, reduced aliasing)
         const int16_t* sd = m_sf2->sampleData();
         size_t sdSize = m_sf2->sampleDataSize();
-        double s0 = (idx >= 0 && idx < (int)sdSize) ? sd[idx] / 32768.0 : 0.0;
-        double s1 = (idx1 >= 0 && idx1 < (int)sdSize) ? sd[idx1] / 32768.0 : 0.0;
-        double sample = s0 + frac * (s1 - s0);
+        auto getSample = [&](int pos) -> double {
+            if (pos < (int)v.sampleStart) pos = (int)v.sampleStart;
+            if (pos >= (int)v.sampleEnd) pos = (int)v.sampleEnd - 1;
+            if (pos >= 0 && pos < (int)sdSize) return sd[pos] / 32768.0;
+            return 0.0;
+        };
+        double frac = absPos - std::floor(absPos);
+        double sample;
+        if (frac < 1e-10) {
+            // Integer position: no interpolation needed
+            sample = getSample(idx);
+        } else {
+            // Lanczos-2 kernel (4 taps)
+            double x = frac;
+            auto lanczos = [](double t) -> double {
+                if (std::abs(t) < 1e-10) return 1.0;
+                if (std::abs(t) >= 2.0) return 0.0;
+                double pi_t = M_PI * t;
+                return std::sin(pi_t) * std::sin(pi_t / 2.0) / (pi_t * pi_t / 2.0);
+            };
+            double s0 = getSample(idx - 1);
+            double s1 = getSample(idx);
+            double s2 = getSample(idx + 1);
+            double s3 = getSample(idx + 2);
+            sample = s0 * lanczos(x + 1.0) + s1 * lanczos(x)
+                   + s2 * lanczos(x - 1.0) + s3 * lanczos(x - 2.0);
+        }
 
-        // Low-pass filter (simple 1-pole)
+        // Biquad low-pass filter
         if (v.filterFc < m_sampleRate * 0.45) {
-            double f = 2.0 * M_PI * v.filterFc / m_sampleRate;
-            double a = std::exp(-f);
-            double b = 1.0 - a;
-            v.filterState = a * v.filterState + b * sample;
-            sample = v.filterState;
+            double w0 = 2.0 * M_PI * v.filterFc / m_sampleRate;
+            double alpha = std::sin(w0) / (2.0 * v.filterQ);
+            double a0 = 1.0 + alpha;
+            double b0 = (1.0 - std::cos(w0)) / 2.0;
+            double b1 = 1.0 - std::cos(w0);
+            double b2 = (1.0 - std::cos(w0)) / 2.0;
+            double a1 = -2.0 * std::cos(w0);
+            double a2 = 1.0 - alpha;
+
+            // Direct Form II Transposed
+            double y = (b0 * sample + v.filterState[0]) / a0;
+            v.filterState[0] = b1 * sample - a1 * y + v.filterState[1];
+            v.filterState[1] = b2 * sample - a2 * y;
+            sample = y;
         }
 
         // Amplitude
@@ -568,9 +691,33 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         // Advance
         double vibratoShift = 0.0;
         if (v.vibratoDepth > 0.0 && !isDrumChannel) {
-            vibratoShift = std::sin(v.position * 0.02) * v.vibratoDepth; // ~5Hz LFO
+            // Time-based LFO (~5Hz)
+            static double vibratoPhases[256] = {};
+            int vIdx = &v - m_voices.data();
+            vibratoPhases[vIdx] += 2.0 * M_PI * 5.0 / m_sampleRate;
+            if (vibratoPhases[vIdx] > 2.0 * M_PI) vibratoPhases[vIdx] -= 2.0 * M_PI;
+            vibratoShift = std::sin(vibratoPhases[vIdx]) * v.vibratoDepth;
         }
-        v.position += v.pitchRatio * std::pow(2.0, vibratoShift / 12.0);
+
+        // Portamento: interpolate from old pitch to new pitch
+        double effectivePitchRatio = v.basePitchRatio;
+        if (v.portamentoProgress < 1.0) {
+            const auto& ch = m_channels[v.channel];
+            if (ch.portamentoOn >= 64 && ch.portamentoTime > 0 && !isDrumChannel) {
+                // CC5 maps 0-127 to ~1ms-10s
+                double portamentoRate = std::pow(10.0, (ch.portamentoTime / 127.0) * 4.0 - 3.0);
+                v.portamentoProgress += 1.0 / (portamentoRate * m_sampleRate);
+                if (v.portamentoProgress >= 1.0) v.portamentoProgress = 1.0;
+            } else {
+                v.portamentoProgress = 1.0;
+            }
+            // Smooth interpolation (ease-in-out)
+            double t = v.portamentoProgress;
+            t = t * t * (3.0 - 2.0 * t); // Hermite interpolation
+            effectivePitchRatio = v.basePitchRatio + (v.pitchRatio - v.basePitchRatio) * t;
+        }
+
+        v.position += effectivePitchRatio * std::pow(2.0, vibratoShift / 12.0);
     }
 }
 
@@ -789,6 +936,14 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             for (auto& [t, v] : expr.sustain[ch]) {
                 if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 64, v);
             }
+            // Portamento Time (CC5)
+            for (auto& [t, v] : expr.portamentoTime[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 5, v);
+            }
+            // Portamento On/Off (CC65)
+            for (auto& [t, v] : expr.portamentoOn[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 65, v);
+            }
         }
 
         // Note On: start new notes in this block
@@ -811,7 +966,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         for (auto& a : active) {
             if (a.offDone) continue;
             int noteEnd = (int)(midi.tickToSeconds(a.note->endTime, a.note->track) * m_sampleRate);
-            if (noteEnd < pos) {
+            if (noteEnd <= pos) {
                 noteOff(a.note->channel, a.note->note);
                 a.offDone = true;
             }

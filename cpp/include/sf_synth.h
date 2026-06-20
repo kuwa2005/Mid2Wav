@@ -34,8 +34,11 @@ struct SF2Voice {
     double releaseLevel = 0.0;
     double filterFc = 13500.0;
     double filterQ = 0.7;
-    double filterState = 0.0;
+    double filterState[4] = {}; // biquad: x[n-1], x[n-2], y[n-1], y[n-2]
     double vibratoDepth = 0.0;  // CC1 modulation depth (semitones)
+    uint32_t age = 0;            // Voice age for stealing priority
+    double basePitchRatio = 1.0; // Target pitch ratio (for portamento)
+    double portamentoProgress = 1.0; // 0.0=old pitch, 1.0=new pitch
 };
 
 struct ChannelState {
@@ -55,6 +58,9 @@ struct ChannelState {
     int foot = 0;
     double fineTune = 0.0;    // RPN 1: ±100 cents
     int coarseTune = 0;       // RPN 2: ±64 semitones
+    int portamentoTime = 0;   // CC5: portamento time
+    int portamentoOn = 0;     // CC65: portamento on/off
+    int lastNote = -1;        // for portamento pitch tracking
     // RPN state
     int rpnLSB = 127;  // 127 = no RPN selected
     int rpnMSB = 127;
