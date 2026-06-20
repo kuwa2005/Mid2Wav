@@ -313,6 +313,12 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
             // Vibrato depth from modulation (CC1)
             v.vibratoDepth = m_channels[channel].modulation / 127.0 * 2.0; // max 2 semitones
 
+            // Store root key for live pitch calculation
+            v.rootKey = zone.rootKey;
+
+            // basePitchRatio = pitchRatio (for portamento reference)
+            v.basePitchRatio = v.pitchRatio;
+
             return;
         }
     }
@@ -497,7 +503,7 @@ void SFSynthesizer::controlChange(int channel, int cc, int value) {
             }
             break;
         }
-        case 65: break; // Portamento On/Off (未実装)
+        case 65: ch.portamentoOn = value; break;
         case 91: ch.reverb = value; break;
         case 93: ch.chorus = value; break;
         case 94: ch.delay = value; break;
@@ -582,6 +588,21 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
     if (!isDrumChannel) {
         v.vibratoDepth = m_channels[v.channel].modulation / 127.0 * 2.0;
     }
+
+    // Live pitch ratio update (pitch bend, tuning)
+    if (!isDrumChannel) {
+        double noteFreq = 440.0 * std::pow(2.0, (v.note - 69) / 12.0);
+        double rootFreq = 440.0 * std::pow(2.0, (v.rootKey - 69) / 12.0);
+        double pitchBend = getEffectivePitchBend(v.channel);
+        double tuning = getEffectiveTuning(v.channel);
+        v.pitchRatio = (noteFreq / rootFreq) * std::pow(2.0, (pitchBend + tuning) / 12.0)
+                       * (v.sampleRate / (double)m_sampleRate);
+        if (v.portamentoProgress >= 1.0) v.basePitchRatio = v.pitchRatio;
+    }
+
+    // Live pan update
+    double chPan = (m_channels[v.channel].pan - 64) / 64.0;
+    v.pan = std::clamp(v.pan * 0.99 + chPan * 0.01, -1.0, 1.0); // smooth transition
 
     // Update LFO phase for this voice
     double lfoValue = 0.0;
@@ -770,6 +791,7 @@ static void processVoiceFallback(SF2Voice& v, float* left, float* right, int cou
 void SFSynthesizer::processBlock(std::vector<float>& left, std::vector<float>& right, int count) {
     for (auto& v : m_voices) {
         if (!v.active) continue;
+        v.age++;
         if (m_fallbackMode) {
             processVoiceFallback(v, left.data(), right.data(), count, m_sampleRate);
         } else {
@@ -886,17 +908,36 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             double blockSecStart = (double)pos / m_sampleRate;
             double blockSecEnd = (double)blockEnd / m_sampleRate;
             const auto& tmap = midi.tempoMap();
+            int ts = (int)tmap.size();
+
+            // tickToSecondsの逆変換（区間BPM補間）
             auto tickForTime = [&](double sec) -> int64_t {
-                int64_t tick = 0;
-                double prevTime = 0;
-                double prevTick = 0;
-                for (auto& [t, bpm] : tmap) {
-                    double thisTime = midi.tickToSeconds(t);
-                    if (thisTime >= sec) break;
-                    tick = t;
-                    prevTime = thisTime;
+                if (ts == 0) {
+                    // デフォルトテンポ 120 BPM
+                    return (int64_t)(sec * midi.ticksPerQuarterNote() * 2.0);
                 }
-                return tick;
+                // 各テンポ区間を線形補間
+                double accumSec = 0;
+                int64_t prevTick = 0;
+                for (int i = 0; i < ts; i++) {
+                    double tickSec = midi.tickToSeconds(tmap[i].first);
+                    double intervalSec = tickSec - accumSec;
+                    if (intervalSec > 0 && accumSec + intervalSec > sec) {
+                        // この区間内で線形補間
+                        double frac = (sec - accumSec) / intervalSec;
+                        return prevTick + (int64_t)(frac * (tmap[i].first - prevTick));
+                    }
+                    accumSec = tickSec;
+                    prevTick = tmap[i].first;
+                }
+                // テンポ区間外: 最後のBPMで外挿
+                if (ts > 0) {
+                    double lastBPM = tmap[ts - 1].second;
+                    double lastTickSec = midi.tickToSeconds(tmap[ts - 1].first);
+                    double excessSec = sec - lastTickSec;
+                    return tmap[ts - 1].first + (int64_t)(excessSec * midi.ticksPerQuarterNote() * lastBPM / 60.0);
+                }
+                return (int64_t)(sec * midi.ticksPerQuarterNote() * 2.0);
             };
             blockTickStart = tickForTime(blockSecStart);
             blockTickEnd = tickForTime(blockSecEnd);
@@ -922,6 +963,11 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 int useBank = (ch == 9) ? 128 : m_channels[ch].bank;
                 programChange(ch, newProgram, useBank);
                 channelPresetKey[ch] = newProgram * 256 + useBank;
+            } else if (hasBankSelectInBlock) {
+                // Bank MSB単独変更時もプリセット再構築
+                int useBank = (ch == 9) ? 128 : m_channels[ch].bank;
+                programChange(ch, m_channels[ch].program, useBank);
+                channelPresetKey[ch] = m_channels[ch].program * 256 + useBank;
             }
             // Volume
             for (auto& [t, v] : expr.volume[ch]) {
@@ -946,6 +992,10 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             // Sustain
             for (auto& [t, v] : expr.sustain[ch]) {
                 if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 64, v);
+            }
+            // Modulation (CC1)
+            for (auto& [t, v] : expr.modulation[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 1, v);
             }
             // Portamento Time (CC5)
             for (auto& [t, v] : expr.portamentoTime[ch]) {

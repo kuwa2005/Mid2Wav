@@ -38,6 +38,7 @@ struct SF2Voice {
     double vibratoDepth = 0.0;  // CC1 modulation depth (semitones)
     uint32_t age = 0;            // Voice age for stealing priority
     double basePitchRatio = 1.0; // Target pitch ratio (for portamento)
+    double rootKey = 60.0;       // Sample root key for pitch calculation
     double portamentoProgress = 1.0; // 0.0=old pitch, 1.0=new pitch
 };
 
