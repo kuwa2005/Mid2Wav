@@ -46,6 +46,26 @@ struct MidiExpression {
     std::vector<std::pair<int64_t, int>> programChange[16];
     // バンクセレクトMSB (CC0): (tick, value)
     std::vector<std::pair<int64_t, int>> bankSelectMSB[16];
+    // GS SysEx: リバーブパラメータ
+    std::vector<std::pair<int64_t, int>> sysReverbType;      // (tick, type 0-5)
+    std::vector<std::pair<int64_t, int>> sysReverbLevel;     // (tick, level 0-127)
+    std::vector<std::pair<int64_t, int>> sysReverbChar;      // (tick, character)
+    std::vector<std::pair<int64_t, int>> sysReverbPreLPF;    // (tick, pre-LPF)
+    std::vector<std::pair<int64_t, int>> sysReverbDelay;     // (tick, delay)
+    // GS SysEx: コーラスパラメータ
+    std::vector<std::pair<int64_t, int>> sysChorusType;      // (tick, type)
+    std::vector<std::pair<int64_t, int>> sysChorusLevel;     // (tick, level)
+    std::vector<std::pair<int64_t, int>> sysChorusDelay;     // (tick, delay)
+    std::vector<std::pair<int64_t, int>> sysChorusFeed;      // (tick, feedback)
+    // GS SysEx: ディレイパラメータ
+    std::vector<std::pair<int64_t, int>> sysDelayType;       // (tick, type)
+    std::vector<std::pair<int64_t, int>> sysDelayLevel;      // (tick, level)
+    std::vector<std::pair<int64_t, int>> sysDelayTime;       // (tick, time)
+    std::vector<std::pair<int64_t, int>> sysDelayFeed;       // (tick, feedback)
+    // GS SysEx: パート別エフェクト送り量
+    std::vector<std::pair<int64_t, int>> sysPartReverbSend[16];  // (tick, level)
+    std::vector<std::pair<int64_t, int>> sysPartChorusSend[16];  // (tick, level)
+    std::vector<std::pair<int64_t, int>> sysPartDelaySend[16];   // (tick, level)
 
     void addPitchBend(int ch, int64_t tick, int value) { pitchBend[ch].push_back({tick, value}); }
     void addModulation(int ch, int64_t tick, int value) { modulation[ch].push_back({tick, value}); }
@@ -73,6 +93,26 @@ struct MidiExpression {
             std::sort(sustain[ch].begin(), sustain[ch].end(), cmp);
             std::sort(programChange[ch].begin(), programChange[ch].end(), cmp);
             std::sort(bankSelectMSB[ch].begin(), bankSelectMSB[ch].end(), cmp);
+        }
+        // GS SysEx sort
+        auto cmp2 = [](auto& a, auto& b) { return a.first < b.first; };
+        std::sort(sysReverbType.begin(), sysReverbType.end(), cmp2);
+        std::sort(sysReverbLevel.begin(), sysReverbLevel.end(), cmp2);
+        std::sort(sysReverbChar.begin(), sysReverbChar.end(), cmp2);
+        std::sort(sysReverbPreLPF.begin(), sysReverbPreLPF.end(), cmp2);
+        std::sort(sysReverbDelay.begin(), sysReverbDelay.end(), cmp2);
+        std::sort(sysChorusType.begin(), sysChorusType.end(), cmp2);
+        std::sort(sysChorusLevel.begin(), sysChorusLevel.end(), cmp2);
+        std::sort(sysChorusDelay.begin(), sysChorusDelay.end(), cmp2);
+        std::sort(sysChorusFeed.begin(), sysChorusFeed.end(), cmp2);
+        std::sort(sysDelayType.begin(), sysDelayType.end(), cmp2);
+        std::sort(sysDelayLevel.begin(), sysDelayLevel.end(), cmp2);
+        std::sort(sysDelayTime.begin(), sysDelayTime.end(), cmp2);
+        std::sort(sysDelayFeed.begin(), sysDelayFeed.end(), cmp2);
+        for (int ch = 0; ch < 16; ch++) {
+            std::sort(sysPartReverbSend[ch].begin(), sysPartReverbSend[ch].end(), cmp2);
+            std::sort(sysPartChorusSend[ch].begin(), sysPartChorusSend[ch].end(), cmp2);
+            std::sort(sysPartDelaySend[ch].begin(), sysPartDelaySend[ch].end(), cmp2);
         }
     }
 

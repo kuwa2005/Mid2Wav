@@ -142,4 +142,10 @@ private:
     SimpleReverb m_reverb;
     Chorus m_chorus;
     Delay m_delay;
+    // GS SysEx effect levels
+    float m_reverbLevel = 0.0f;
+    float m_chorusLevel = 0.0f;
+    float m_delayLevel = 0.0f;
+    float m_delayTime = 0.25f;
+    float m_delayFeedback = 0.3f;
 };

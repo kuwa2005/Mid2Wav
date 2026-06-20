@@ -574,11 +574,21 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
     if (!v.active) return;
 
     bool isDrumChannel = (m_channels[v.channel].bank == 128);
+    static double vibratoPhases[256] = {};
+    int vIdx = &v - m_voices.data();
+    if (vIdx < 0 || vIdx >= 256) vIdx = 0;
 
-    // ── Envelope ──
-    // Update vibrato depth from CC1 (in case it changed mid-note)
+    // Update vibrato depth from CC1
     if (!isDrumChannel) {
         v.vibratoDepth = m_channels[v.channel].modulation / 127.0 * 2.0;
+    }
+
+    // Update LFO phase for this voice
+    double lfoValue = 0.0;
+    if (v.vibratoDepth > 0.0 && !isDrumChannel) {
+        vibratoPhases[vIdx] += 2.0 * M_PI * 5.0 / m_sampleRate;
+        if (vibratoPhases[vIdx] > 2.0 * M_PI) vibratoPhases[vIdx] -= 2.0 * M_PI;
+        lfoValue = std::sin(vibratoPhases[vIdx]);
     }
     for (int i = 0; i < count; i++) {
         if (!v.active) break;
@@ -652,9 +662,14 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
                    + s2 * lanczos(x - 1.0) + s3 * lanczos(x - 2.0);
         }
 
-        // Biquad low-pass filter
-        if (v.filterFc < m_sampleRate * 0.45) {
-            double w0 = 2.0 * M_PI * v.filterFc / m_sampleRate;
+        // Biquad low-pass filter with modulation
+        double modulatedFc = v.filterFc;
+        if (v.vibratoDepth > 0.0 && !isDrumChannel) {
+            modulatedFc *= std::pow(2.0, lfoValue * v.vibratoDepth * 0.5 / 12.0);
+        }
+        modulatedFc = std::clamp(modulatedFc, 20.0, m_sampleRate * 0.45);
+        if (modulatedFc < m_sampleRate * 0.45) {
+            double w0 = 2.0 * M_PI * modulatedFc / m_sampleRate;
             double alpha = std::sin(w0) / (2.0 * v.filterQ);
             double a0 = 1.0 + alpha;
             double b0 = (1.0 - std::cos(w0)) / 2.0;
@@ -670,13 +685,17 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
             sample = y;
         }
 
-        // Amplitude
+        // Amplitude with LFO modulation (tremolo)
         double envAmp = v.envLevel * v.amplitude;
         double chVol = m_channels[v.channel].volume / 127.0;
         double chExpr = m_channels[v.channel].expression / 127.0;
-        double breathAmp = 0.5 + 0.5 * m_channels[v.channel].breath / 127.0; // 50-100%
-        double footAmp = 0.5 + 0.5 * m_channels[v.channel].foot / 127.0;     // 50-100%
-        double vol = envAmp * chVol * chExpr * breathAmp * footAmp;
+        double breathAmp = 0.5 + 0.5 * m_channels[v.channel].breath / 127.0;
+        double footAmp = 0.5 + 0.5 * m_channels[v.channel].foot / 127.0;
+        double tremoloAmp = 1.0;
+        if (v.vibratoDepth > 0.0 && !isDrumChannel) {
+            tremoloAmp = 1.0 + lfoValue * v.vibratoDepth * 0.1;
+        }
+        double vol = envAmp * chVol * chExpr * breathAmp * footAmp * tremoloAmp;
 
         // Pan
         double panL = std::sqrt(0.5 * (1.0 - v.pan));
@@ -689,15 +708,7 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         if (std::isfinite(outR)) right[i] += (float)outR;
 
         // Advance
-        double vibratoShift = 0.0;
-        if (v.vibratoDepth > 0.0 && !isDrumChannel) {
-            // Time-based LFO (~5Hz)
-            static double vibratoPhases[256] = {};
-            int vIdx = &v - m_voices.data();
-            vibratoPhases[vIdx] += 2.0 * M_PI * 5.0 / m_sampleRate;
-            if (vibratoPhases[vIdx] > 2.0 * M_PI) vibratoPhases[vIdx] -= 2.0 * M_PI;
-            vibratoShift = std::sin(vibratoPhases[vIdx]) * v.vibratoDepth;
-        }
+        double vibratoShift = lfoValue * v.vibratoDepth;
 
         // Portamento: interpolate from old pitch to new pitch
         double effectivePitchRatio = v.basePitchRatio;
@@ -978,8 +989,38 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         std::vector<float> bl(blockLen, 0.0f), br(blockLen, 0.0f);
         processBlock(bl, br, blockLen);
 
+        // GS SysEx: エフェクトパラメータを適用
+        // リバーブ
+        for (auto& [t, v] : expr.sysReverbLevel) {
+            if (t >= blockTickStart && t < blockTickEnd) {
+                m_reverbLevel = v / 127.0f;
+            }
+        }
+        // コーラス
+        for (auto& [t, v] : expr.sysChorusLevel) {
+            if (t >= blockTickStart && t < blockTickEnd) {
+                m_chorusLevel = v / 127.0f;
+            }
+        }
+        // ディレイ
+        for (auto& [t, v] : expr.sysDelayLevel) {
+            if (t >= blockTickStart && t < blockTickEnd) {
+                m_delayLevel = v / 127.0f;
+            }
+        }
+        for (auto& [t, v] : expr.sysDelayTime) {
+            if (t >= blockTickStart && t < blockTickEnd) {
+                m_delayTime = v / 127.0f;
+            }
+        }
+        for (auto& [t, v] : expr.sysDelayFeed) {
+            if (t >= blockTickStart && t < blockTickEnd) {
+                m_delayFeedback = v / 127.0f;
+            }
+        }
+
         // リバーブ適用
-        float maxReverb = 0.0f;
+        float maxReverb = m_reverbLevel;
         for (int ch = 0; ch < 16; ch++) {
             maxReverb = std::max(maxReverb, (float)m_channels[ch].reverb / 127.0f);
         }
@@ -988,24 +1029,23 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         }
 
         // コーラス適用
-        int maxChorus = 0;
+        float maxChorus = m_chorusLevel;
         for (int ch = 0; ch < 16; ch++) {
-            maxChorus = std::max(maxChorus, m_channels[ch].chorus);
+            maxChorus = std::max(maxChorus, (float)m_channels[ch].chorus / 127.0f);
         }
-        if (maxChorus > 0) {
-            m_chorus.process(bl.data(), br.data(), blockLen, maxChorus);
+        if (maxChorus > 0.001f) {
+            m_chorus.process(bl.data(), br.data(), blockLen, maxChorus * 127.0f);
         }
 
-        // ディレイ適用 (CC94)
-        int maxDelay = 0;
+        // ディレイ適用
+        float maxDelayMix = m_delayLevel;
         for (int ch = 0; ch < 16; ch++) {
-            maxDelay = std::max(maxDelay, m_channels[ch].delay);
+            maxDelayMix = std::max(maxDelayMix, (float)m_channels[ch].delay / 127.0f);
         }
-        if (maxDelay > 0) {
-            float delayMix = maxDelay / 127.0f * 0.4f;  // max 40% wet
-            float delayTime = 0.25f + (maxDelay / 127.0f) * 0.5f;  // 250ms - 750ms
-            float feedback = 0.2f + (maxDelay / 127.0f) * 0.3f;    // 20-50%
-            m_delay.process(bl.data(), br.data(), blockLen, delayTime, feedback, delayMix);
+        if (maxDelayMix > 0.001f) {
+            float delayTime = 0.1f + m_delayTime * 0.9f;  // 100ms - 1s
+            float feedback = 0.2f + m_delayFeedback * 0.5f;
+            m_delay.process(bl.data(), br.data(), blockLen, delayTime, feedback, maxDelayMix * 0.4f);
         }
 
         for (int i = 0; i < blockLen; i++) {

@@ -217,14 +217,13 @@ void MidiFile::extractNotes() {
                         m_hasRolandGS = true;
                         // Device ID (通常 10=0x10), Unit (0x42=GS)
                         if (sysexLen >= 4 && trackData[sysexStart + 2] == 0x42) {
-                            // GS SysEx
-                            // Model ID for SC-8850: 54 00 14
-                            if (sysexLen >= 7 &&
-                                trackData[sysexStart + 3] == 0x12 &&
-                                sysexLen >= 10) {
-                                uint8_t addr1 = trackData[sysexStart + 4];
-                                uint8_t addr2 = trackData[sysexStart + 5];
-                                // SC-8850 model ID: 54 00 14
+                            // GS DT1 SysEx: F0 41 10 42 12 <addr> <data...> F7
+                            if (sysexLen >= 8 && trackData[sysexStart + 3] == 0x12) {
+                                uint8_t addr1 = trackData[sysexStart + 4]; // アドレス上位
+                                uint8_t addr2 = trackData[sysexStart + 5]; // アドレス中
+                                uint8_t addr3 = sysexLen > 6 ? trackData[sysexStart + 6] : 0; // アドレス下位
+
+                                // SC-8850 model ID detection
                                 if (addr1 == 0x00 && addr2 == 0x00 && sysexLen >= 10) {
                                     if (trackData[sysexStart + 6] == 0x54 &&
                                         trackData[sysexStart + 7] == 0x00 &&
@@ -232,18 +231,66 @@ void MidiFile::extractNotes() {
                                         m_hasSC8850 = true;
                                     }
                                 }
-                            }
-                            // SC-88VL/SC-88: Model ID varies
-                            if (sysexLen >= 8 && trackData[sysexStart + 3] == 0x12) {
-                                // SC-88VL: 54 00 08
-                                // SC-88: 54 00 04
-                                if (sysexLen >= 10) {
-                                    if (trackData[sysexStart + 6] == 0x54 &&
-                                        trackData[sysexStart + 7] == 0x00) {
-                                        uint8_t modelVer = trackData[sysexStart + 8];
-                                        if (modelVer == 0x08) m_hasSC88VL = true;
-                                        else if (modelVer == 0x04) m_hasSC88 = true;
-                                        else if (modelVer == 0x02) m_hasSC55 = true;
+
+                                // SC-88VL/SC-88: Model ID varies
+                                if (sysexLen >= 8 && trackData[sysexStart + 3] == 0x12) {
+                                    if (sysexLen >= 10) {
+                                        if (trackData[sysexStart + 6] == 0x54 &&
+                                            trackData[sysexStart + 7] == 0x00) {
+                                            uint8_t modelVer = trackData[sysexStart + 8];
+                                            if (modelVer == 0x08) m_hasSC88VL = true;
+                                            else if (modelVer == 0x04) m_hasSC88 = true;
+                                            else if (modelVer == 0x02) m_hasSC55 = true;
+                                        }
+                                    }
+                                }
+
+                                // GS エフェクトパラメータ解析
+                                // リバーブ: addr1=0x40, addr2=0x01
+                                if (addr1 == 0x40 && addr2 == 0x01 && sysexLen > 7) {
+                                    uint8_t param = addr3;
+                                    uint8_t val = trackData[sysexStart + 7];
+                                    switch (param) {
+                                        case 0x00: m_expression.sysReverbType.push_back({currentTick, val}); break;
+                                        case 0x01: m_expression.sysReverbChar.push_back({currentTick, val}); break;
+                                        case 0x02: m_expression.sysReverbPreLPF.push_back({currentTick, val}); break;
+                                        case 0x03: m_expression.sysReverbLevel.push_back({currentTick, val}); break;
+                                        case 0x04: m_expression.sysReverbDelay.push_back({currentTick, val}); break;
+                                    }
+                                }
+                                // コーラス: addr1=0x40, addr2=0x02
+                                if (addr1 == 0x40 && addr2 == 0x02 && sysexLen > 7) {
+                                    uint8_t param = addr3;
+                                    uint8_t val = trackData[sysexStart + 7];
+                                    switch (param) {
+                                        case 0x00: m_expression.sysChorusType.push_back({currentTick, val}); break;
+                                        case 0x02: m_expression.sysChorusLevel.push_back({currentTick, val}); break;
+                                        case 0x03: m_expression.sysChorusDelay.push_back({currentTick, val}); break;
+                                        case 0x04: m_expression.sysChorusFeed.push_back({currentTick, val}); break;
+                                    }
+                                }
+                                // ディレイ: addr1=0x40, addr2=0x03
+                                if (addr1 == 0x40 && addr2 == 0x03 && sysexLen > 7) {
+                                    uint8_t param = addr3;
+                                    uint8_t val = trackData[sysexStart + 7];
+                                    switch (param) {
+                                        case 0x00: m_expression.sysDelayType.push_back({currentTick, val}); break;
+                                        case 0x02: m_expression.sysDelayLevel.push_back({currentTick, val}); break;
+                                        case 0x03: m_expression.sysDelayTime.push_back({currentTick, val}); break;
+                                        case 0x04: m_expression.sysDelayFeed.push_back({currentTick, val}); break;
+                                    }
+                                }
+                                // パート別エフェクト送り量: addr1=0x40, addr2=0x10-0x1F
+                                if (addr1 == 0x40 && addr2 >= 0x10 && addr2 <= 0x1F && sysexLen > 7) {
+                                    int part = addr2 - 0x10;
+                                    uint8_t param = addr3;
+                                    uint8_t val = trackData[sysexStart + 7];
+                                    if (part >= 0 && part < 16) {
+                                        switch (param) {
+                                            case 0x03: m_expression.sysPartReverbSend[part].push_back({currentTick, val}); break;
+                                            case 0x05: m_expression.sysPartChorusSend[part].push_back({currentTick, val}); break;
+                                            case 0x06: m_expression.sysPartDelaySend[part].push_back({currentTick, val}); break;
+                                        }
                                     }
                                 }
                             }
