@@ -216,6 +216,7 @@ int runConverter(const ConvertOptions& opts) {
 
         try {
             MidiFile midi;
+            std::cout << "  [Debug] Loading MIDI: " << midiPath << std::endl;
             if (!midi.load(midiPath)) {
                 std::cerr << "  [ERROR] Failed to load MIDI" << std::endl;
                 log.status = "fail"; log.failReason = "Failed to load MIDI";

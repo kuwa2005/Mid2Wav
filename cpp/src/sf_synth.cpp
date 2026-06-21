@@ -521,7 +521,8 @@ void SFSynthesizer::controlChange(int channel, int cc, int value) {
         case 7: ch.volume = value; break;
         case 10: ch.pan = value; break;
         case 11: ch.expression = value; break;
-        case 38: ch.rpnValue = (value & 0x7F) | ((ch.rpnValue & 0x7F00)); break; // Data Entry LSB // Bank Select LSB
+        case 38: ch.rpnValue = (value & 0x7F) | ((ch.rpnValue & 0x7F00)); break; // Data Entry LSB
+        case 32: ch.bankLSB = value; break; // Bank Select LSB
         case 64: {
             int prevSustain = ch.sustain;
             ch.sustain = value;
@@ -880,9 +881,11 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
 
     // Reset
     for (auto& v : m_voices) v.active = false;
+    std::cout << "  [Debug] Voices reset" << std::endl;
 
     // 各チャンネルの初期program/bankを決定
     const auto& expr = midi.expression();
+    std::cout << "  [Debug] Starting channel init" << std::endl;
     for (int ch = 0; ch < 16; ch++) {
         int64_t firstNoteTick = INT64_MAX;
         for (auto& n : notes) {
@@ -900,11 +903,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             if (t <= firstNoteTick) initBank = v;
         }
 
-        // GM規約: ch10(0-indexed 9)は常にドラムバンク128
-        if (ch == 9) {
-            initBank = 128;
-        }
-
+        // MIDIファイルのprogram/bankをそのまま信頼（GM規約の強制上書きなし）
         m_channels[ch].program = initProgram;
         m_channels[ch].bank = initBank;
         programChange(ch, m_channels[ch].program, m_channels[ch].bank);
@@ -922,7 +921,11 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         m_channels[ch].delay = expr.getValueAtTick(expr.delayDepth[ch], firstNoteTick, 0);
         m_channels[ch].portamentoTime = expr.getValueAtTick(expr.portamentoTime[ch], firstNoteTick, 0);
         m_channels[ch].portamentoOn = expr.getValueAtTick(expr.portamentoOn[ch], firstNoteTick, 0);
+        m_channels[ch].breath = expr.getValueAtTick(expr.breath[ch], firstNoteTick, 0);
+        m_channels[ch].foot = expr.getValueAtTick(expr.foot[ch], firstNoteTick, 0);
+        m_channels[ch].bankLSB = expr.getValueAtTick(expr.bankSelectLSB[ch], firstNoteTick, 0);
     }
+    std::cout << "  [Debug] Channel init done" << std::endl;
 
     // チャンネル情報表示
     std::cout << "  [Channels] " << std::endl;
@@ -997,12 +1000,15 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
 
         const auto& expr = midi.expression();
         for (int ch = 0; ch < 16; ch++) {
-            // Bank Select MSB → Program Change の順に適用（MIDI仕様）
+            // Bank Select MSB → Bank Select LSB → Program Change の順に適用（MIDI仕様）
             bool needProgramChange = false;
             bool hasBankSelectInBlock = false;
             int newProgram = m_channels[ch].program;
             for (auto& [t, v] : expr.bankSelectMSB[ch]) {
                 if (t >= blockTickStart && t < blockTickEnd) { m_channels[ch].bank = v; hasBankSelectInBlock = true; }
+            }
+            for (auto& [t, v] : expr.bankSelectLSB[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) { m_channels[ch].bankLSB = v; hasBankSelectInBlock = true; }
             }
             for (auto& [t, v] : expr.programChange[ch]) {
                 if (t >= blockTickStart && t < blockTickEnd) {
@@ -1011,15 +1017,11 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 }
             }
             if (needProgramChange) {
-                // GM規約: ch10(0-indexed 9)は常にドラムバンク128
-                int useBank = (ch == 9) ? 128 : m_channels[ch].bank;
-                programChange(ch, newProgram, useBank);
-                channelPresetKey[ch] = newProgram * 256 + useBank;
+                programChange(ch, newProgram, m_channels[ch].bank);
+                channelPresetKey[ch] = newProgram * 256 + m_channels[ch].bank;
             } else if (hasBankSelectInBlock) {
-                // Bank MSB単独変更時もプリセット再構築
-                int useBank = (ch == 9) ? 128 : m_channels[ch].bank;
-                programChange(ch, m_channels[ch].program, useBank);
-                channelPresetKey[ch] = m_channels[ch].program * 256 + useBank;
+                programChange(ch, m_channels[ch].program, m_channels[ch].bank);
+                channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
             }
             // Volume
             for (auto& [t, v] : expr.volume[ch]) {
@@ -1353,8 +1355,6 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         for (auto& n : notes) if (n.channel == ch && n.startTime < firstNoteTick) firstNoteTick = n.startTime;
         for (auto& [t, v] : expr.programChange[ch]) if (t <= firstNoteTick) chProgram = v;
         for (auto& [t, v] : expr.bankSelectMSB[ch]) if (t <= firstNoteTick) chBank = v;
-        // GM規約: ch10(0-indexed 9)は常にドラムバンク128
-        if (ch == 9) chBank = 128;
 
         // このチャンネルのノートのみを抽出
         std::vector<MidiNote> chNotes;

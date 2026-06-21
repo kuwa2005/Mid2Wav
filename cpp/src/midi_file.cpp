@@ -182,7 +182,7 @@ void MidiFile::extractNotes() {
                     case 7: m_expression.addVolume(channel, currentTick, val); break;
                     case 10: m_expression.addPan(channel, currentTick, val); break;
                     case 11: m_expression.addExpression(channel, currentTick, val); break;
-                    case 32: break; // Bank Select LSB (未対応だがパースは保持)
+                    case 32: m_expression.addBankSelectLSB(channel, currentTick, val); break; // Bank Select LSB
                     case 38: m_expression.addDataEntryLSB(channel, currentTick, val); break; // Data Entry LSB (RPN)
                     case 64: m_expression.addSustain(channel, currentTick, val); break;
                     case 65: m_expression.addPortamentoOn(channel, currentTick, val); break;

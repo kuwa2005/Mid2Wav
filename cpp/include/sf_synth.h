@@ -47,6 +47,7 @@ struct SF2Voice {
 struct ChannelState {
     int program = 0;
     int bank = 0;
+    int bankLSB = 0;
     int volume = 100;
     int expression = 127;
     int pan = 64;
