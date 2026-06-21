@@ -1290,33 +1290,48 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             }
         }
 
-        // リバーブ適用
-        float maxReverb = m_reverbLevel;
+        // リバーブ適用: パート別send量の加重平均（maxではなく加算でmuddy防止）
+        float reverbSum = 0.0f;
+        int reverbCount = 0;
         for (int ch = 0; ch < 16; ch++) {
-            maxReverb = std::max(maxReverb, (float)m_channels[ch].reverb / 127.0f);
+            if (m_channels[ch].reverb > 0) {
+                reverbSum += m_channels[ch].reverb / 127.0f;
+                reverbCount++;
+            }
         }
-        if (maxReverb > 0.001f) {
-            m_reverb.process(bl.data(), br.data(), blockLen, maxReverb * 0.6f);
+        float reverbMix = (reverbCount > 0) ? std::min(reverbSum / (float)reverbCount, 1.0f) : m_reverbLevel;
+        if (reverbMix > 0.001f) {
+            m_reverb.process(bl.data(), br.data(), blockLen, reverbMix * 0.6f);
         }
 
-        // コーラス適用
-        float maxChorus = m_chorusLevel;
+        // コーラス適用: 同様に加算ミックス
+        float chorusSum = 0.0f;
+        int chorusCount = 0;
         for (int ch = 0; ch < 16; ch++) {
-            maxChorus = std::max(maxChorus, (float)m_channels[ch].chorus / 127.0f);
+            if (m_channels[ch].chorus > 0) {
+                chorusSum += m_channels[ch].chorus / 127.0f;
+                chorusCount++;
+            }
         }
-        if (maxChorus > 0.001f) {
-            m_chorus.process(bl.data(), br.data(), blockLen, maxChorus * 127.0f);
+        float chorusMix = (chorusCount > 0) ? std::min(chorusSum / (float)chorusCount, 1.0f) : m_chorusLevel;
+        if (chorusMix > 0.001f) {
+            m_chorus.process(bl.data(), br.data(), blockLen, chorusMix * 127.0f);
         }
 
-        // ディレイ適用
-        float maxDelayMix = m_delayLevel;
+        // ディレイ適用: 同様に加算ミックス
+        float delaySum = 0.0f;
+        int delayCount = 0;
         for (int ch = 0; ch < 16; ch++) {
-            maxDelayMix = std::max(maxDelayMix, (float)m_channels[ch].delay / 127.0f);
+            if (m_channels[ch].delay > 0) {
+                delaySum += m_channels[ch].delay / 127.0f;
+                delayCount++;
+            }
         }
-        if (maxDelayMix > 0.001f) {
-            float delayTime = 0.1f + m_delayTime * 0.9f;  // 100ms - 1s
+        float delayMix = (delayCount > 0) ? std::min(delaySum / (float)delayCount, 1.0f) : m_delayLevel;
+        if (delayMix > 0.001f) {
+            float delayTime = 0.1f + m_delayTime * 0.9f;
             float feedback = 0.2f + m_delayFeedback * 0.5f;
-            m_delay.process(bl.data(), br.data(), blockLen, delayTime, feedback, maxDelayMix * 0.4f);
+            m_delay.process(bl.data(), br.data(), blockLen, delayTime, feedback, delayMix * 0.4f);
         }
 
         for (int i = 0; i < blockLen; i++) {
