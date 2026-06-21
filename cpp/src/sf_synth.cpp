@@ -60,8 +60,11 @@ void SFSynthesizer::buildPresetZones(int channel) {
     if (!m_sf2) return;
 
     const auto& ch = m_channels[channel];
-    int pIdx = m_sf2->findPreset(ch.bank, ch.program);
-    if (pIdx < 0) pIdx = m_sf2->findPreset(0, ch.program);
+    // 14bit bank: (MSB << 7) | LSB — SF2 preset bank matching
+    int fullBank = ((ch.bank & 0x7F) << 7) | (ch.bankLSB & 0x7F);
+    int pIdx = m_sf2->findPreset(fullBank, ch.program);
+    if (pIdx < 0) pIdx = m_sf2->findPreset(ch.bank, ch.program); // fallback: MSB only
+    if (pIdx < 0) pIdx = m_sf2->findPreset(0, ch.program); // fallback: bank 0
     if (pIdx < 0) return;
 
     const auto& presets = m_sf2->presets();
