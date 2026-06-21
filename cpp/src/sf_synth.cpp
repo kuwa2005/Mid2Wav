@@ -338,8 +338,8 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
             // basePitchRatio = pitchRatio (for portamento reference)
             v.basePitchRatio = v.pitchRatio;
 
-            // Exclusive class: 同一チャンネルで同じexclusiveClassの他ボイスをリリース
-            if (zone.exclusiveClass > 0) {
+            // Exclusive class: ドラム(bank==128)のみ適用。メロディゾーンでは無効化
+            if (zone.exclusiveClass > 0 && m_channels[channel].bank == 128) {
                 for (auto& other : m_voices) {
                     if (&other != &v && other.active && other.channel == channel &&
                         other.exclusiveClass == zone.exclusiveClass && !other.releasing) {
@@ -417,6 +417,7 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
                 double attenLin = attenuateDb(zone.attenuation);
                 v.amplitude = velAmp * attenLin;
                 double chPan = (m_channels[channel].pan - 64) / 64.0;
+                v.zonePan = zone.pan;
                 v.pan = std::clamp(zone.pan + chPan, -1.0, 1.0);
                 double aTime = std::max(zone.attack, 0.001);
                 double dTime = std::max(zone.decay, 0.001);
@@ -693,8 +694,11 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
 
         // Loop / bounds check
         bool shouldLoop = v.loop && v.loopEnd > v.loopStart;
-        // Mode 3: stop looping when releasing
-        if (shouldLoop && v.loopMode == 3 && v.releasing) {
+        // Mode 3: mark loop stop on release, complete current loop cycle
+        if (v.loopMode == 3 && v.releasing && !v.loopStopPending) {
+            v.loopStopPending = true;
+        }
+        if (shouldLoop && v.loopStopPending && idx >= (int)v.loopEnd) {
             shouldLoop = false;
         }
         if (shouldLoop) {
@@ -1072,11 +1076,17 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                         m_channels[ch].bank = 128;
                         programChange(ch, m_channels[ch].program, m_channels[ch].bank);
                         channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
-                    } else if (v == 0 && ch != 9) {
-                        m_channels[ch].bank = 0;
+                    } else if (v == 0 && ch == 9) {
+                        // Ch10 メロディ化: CC0 MSBを復元
+                        int restoredBank = 0;
+                        for (auto& [bt, bv] : expr.bankSelectMSB[ch]) {
+                            if (bt <= blockTickEnd) restoredBank = bv;
+                        }
+                        m_channels[ch].bank = restoredBank;
                         programChange(ch, m_channels[ch].program, m_channels[ch].bank);
                         channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
                     }
+                    // Ch1-9,11-16: v==0は無視（SysExなしのデフォルトはGM=bank128でなくCC0の値を信頼）
                 }
             }
             if (needProgramChange) {

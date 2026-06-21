@@ -22,6 +22,7 @@ struct SF2Voice {
     uint32_t loopEnd = 0;
     bool loop = false;
     int loopMode = 0; // 0=no loop, 1=continuous, 3=loop until release
+    bool loopStopPending = false; // mode 3: stop after current loop cycle
     uint16_t exclusiveClass = 0;
     double sampleRate = 44100.0;
     double position = 0.0;
@@ -125,7 +126,8 @@ private:
         uint32_t loopStart = 0;
         uint32_t loopEnd = 0;
         bool loop = false;
-        int loopMode = 0; // 0=no loop, 1=continuous, 3=loop until release
+    int loopMode = 0; // 0=no loop, 1=continuous, 3=loop until release
+    bool loopStopPending = false; // mode 3: stop after current loop cycle
         uint16_t exclusiveClass = 0;
     };
 
