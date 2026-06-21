@@ -1117,47 +1117,12 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 programChange(ch, m_channels[ch].program, m_channels[ch].bank);
                 channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
             }
-            for (auto& [t, v] : expr.foot[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 4, v);
-            }
-            // Portamento Time (CC5)
-            for (auto& [t, v] : expr.portamentoTime[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 5, v);
-            }
-            // Portamento On/Off (CC65)
-            for (auto& [t, v] : expr.portamentoOn[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 65, v);
-            }
-            // Data Entry MSB (CC6) - RPN
-            for (auto& [t, v] : expr.dataEntryMSB[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 6, v);
-            }
-            // Data Entry LSB (CC38) - RPN
-            for (auto& [t, v] : expr.dataEntryLSB[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 38, v);
-            }
-            // NRPN LSB (CC98)
-            for (auto& [t, v] : expr.nrpnLSB[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 98, v);
-            }
-            // NRPN MSB (CC99)
-            for (auto& [t, v] : expr.nrpnMSB[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 99, v);
-            }
-            // RPN LSB (CC100)
-            for (auto& [t, v] : expr.rpnLSB[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 100, v);
-            }
-            // RPN MSB (CC101)
-            for (auto& [t, v] : expr.rpnMSB[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 101, v);
-            }
         }
 
         // Note On/Off を正確なサンプル位置で処理
         // ブロック内の全ノート・CCイベントを集めてソート
         struct BlockEvent { int sampleOffset; int channel; int type; int p1; int p2; };
-        // type: 0=noteOff, 1=CC, 2=pitchBend, 3=noteOn
+        // type: 0=noteOff, 1=CC, 2=pitchBend, 3=noteOn, 4=bankMSB, 5=bankLSB, 6=programChange, 7=sysPartMode
         std::vector<BlockEvent> events;
 
         // Note events
@@ -1208,6 +1173,15 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             addCC(expr.modulation[ch], 1);
             addCC(expr.sustain[ch], 64);
             addCC(expr.pan[ch], 10);
+            addCC(expr.foot[ch], 4);
+            addCC(expr.portamentoTime[ch], 5);
+            addCC(expr.portamentoOn[ch], 65);
+            addCC(expr.dataEntryMSB[ch], 6);
+            addCC(expr.dataEntryLSB[ch], 38);
+            addCC(expr.nrpnLSB[ch], 98);
+            addCC(expr.nrpnMSB[ch], 99);
+            addCC(expr.rpnLSB[ch], 100);
+            addCC(expr.rpnMSB[ch], 101);
             addCC(expr.reverbDepth[ch], 91);
             addCC(expr.chorusDepth[ch], 93);
             addCC(expr.delayDepth[ch], 94);
