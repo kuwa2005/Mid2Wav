@@ -40,11 +40,12 @@ struct SF2Voice {
     bool filterActive = false;
     double filterState[4] = {}; // biquad: x[n-1], x[n-2], y[n-1], y[n-2]
     double vibratoDepth = 0.0;  // CC1 modulation depth (semitones)
-    uint32_t age = 0;            // Voice age for stealing priority
+    uint32_t age = 0;            // Voice age for diagnostics/portamento tracking
     double basePitchRatio = 1.0; // Target pitch ratio (for portamento)
     double rootKey = 60.0;       // Sample root key for pitch calculation
     double zonePan = 0.0;        // SF2 zone pan (set at noteOn, preserved)
     double portamentoProgress = 1.0; // 0.0=old pitch, 1.0=new pitch
+    double vibratoPhase = 0.0;
 };
 
 struct ChannelState {
@@ -116,6 +117,7 @@ private:
         double pan = 0.0;
         double rootKey = -1.0;
         double fineTune = 0.0;
+        double coarseTune = 0.0;
         double attack = 0.0;
         double decay = 0.0;
         double sustain = 1.0;
@@ -129,8 +131,8 @@ private:
         uint32_t loopStart = 0;
         uint32_t loopEnd = 0;
         bool loop = false;
-    int loopMode = 0; // 0=no loop, 1=continuous, 3=loop until release
-    bool loopStopPending = false; // mode 3: stop after current loop cycle
+        int loopMode = 0; // 0=no loop, 1=continuous, 3=loop until release
+        bool loopStopPending = false; // mode 3: stop after current loop cycle
         uint16_t exclusiveClass = 0;
     };
 
@@ -150,7 +152,6 @@ private:
     int m_sampleRate = 44100;
     std::vector<SF2Voice> m_voices;
     std::vector<ChannelState> m_channels;
-    static const int MAX_VOICES = 256;
 
     std::vector<ResolvedZone> m_channelZones[16];
     SimpleReverb m_reverb;

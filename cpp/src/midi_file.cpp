@@ -111,6 +111,7 @@ void MidiFile::extractNotes() {
             else status = runningStatus;
 
             if (status == 0xFF) {
+                runningStatus = 0;
                 uint8_t metaType = trackData[pos++];
                 uint32_t metaLen = readVarLen(trackData.data(), pos);
                 if (metaType == 0x51 && metaLen == 3) {
@@ -125,6 +126,75 @@ void MidiFile::extractNotes() {
                     trackEvts.push_back(e);
                 }
                 pos += metaLen;
+                continue;
+            }
+
+            if (status == 0xF0 || status == 0xF7) {
+                uint32_t sysexLen = readVarLen(trackData.data(), pos);
+                if (pos + sysexLen > trackData.size()) break;
+                size_t sysexStart = pos;
+                size_t sysexEnd = pos + sysexLen;
+                pos = sysexEnd;
+                runningStatus = 0;
+
+                if (sysexEnd > sysexStart && trackData[sysexEnd - 1] == 0xF7) sysexEnd--;
+                if (sysexEnd <= sysexStart) continue;
+
+                uint8_t mfr = trackData[sysexStart];
+                if (mfr == 0x41) {
+                    m_hasRolandGS = true;
+                    if (sysexEnd - sysexStart >= 8 && trackData[sysexStart + 2] == 0x42 &&
+                        trackData[sysexStart + 3] == 0x12) {
+                        uint8_t addr1 = trackData[sysexStart + 4];
+                        uint8_t addr2 = trackData[sysexStart + 5];
+                        uint8_t addr3 = trackData[sysexStart + 6];
+                        uint8_t val = trackData[sysexStart + 7];
+
+                        if (addr1 == 0x00 && addr2 == 0x00 && sysexEnd - sysexStart >= 9 &&
+                            trackData[sysexStart + 6] == 0x54 &&
+                            trackData[sysexStart + 7] == 0x00) {
+                            uint8_t modelVer = trackData[sysexStart + 8];
+                            if (modelVer == 0x14) m_hasSC8850 = true;
+                            else if (modelVer == 0x08) m_hasSC88VL = true;
+                            else if (modelVer == 0x04) m_hasSC88 = true;
+                            else if (modelVer == 0x02) m_hasSC55 = true;
+                        }
+
+                        if (addr1 == 0x40 && addr2 == 0x01) {
+                            switch (addr3) {
+                                case 0x00: m_expression.sysReverbType.push_back({currentTick, val}); break;
+                                case 0x01: m_expression.sysReverbChar.push_back({currentTick, val}); break;
+                                case 0x02: m_expression.sysReverbPreLPF.push_back({currentTick, val}); break;
+                                case 0x03: m_expression.sysReverbLevel.push_back({currentTick, val}); break;
+                                case 0x04: m_expression.sysReverbDelay.push_back({currentTick, val}); break;
+                            }
+                        } else if (addr1 == 0x40 && addr2 == 0x02) {
+                            switch (addr3) {
+                                case 0x00: m_expression.sysChorusType.push_back({currentTick, val}); break;
+                                case 0x02: m_expression.sysChorusLevel.push_back({currentTick, val}); break;
+                                case 0x03: m_expression.sysChorusDelay.push_back({currentTick, val}); break;
+                                case 0x04: m_expression.sysChorusFeed.push_back({currentTick, val}); break;
+                            }
+                        } else if (addr1 == 0x40 && addr2 == 0x03) {
+                            switch (addr3) {
+                                case 0x00: m_expression.sysDelayType.push_back({currentTick, val}); break;
+                                case 0x02: m_expression.sysDelayLevel.push_back({currentTick, val}); break;
+                                case 0x03: m_expression.sysDelayTime.push_back({currentTick, val}); break;
+                                case 0x04: m_expression.sysDelayFeed.push_back({currentTick, val}); break;
+                            }
+                        } else if (addr1 == 0x40 && addr2 >= 0x10 && addr2 <= 0x1F) {
+                            int part = addr2 - 0x10;
+                            switch (addr3) {
+                                case 0x03: m_expression.sysPartReverbSend[part].push_back({currentTick, val}); break;
+                                case 0x05: m_expression.sysPartChorusSend[part].push_back({currentTick, val}); break;
+                                case 0x06: m_expression.sysPartDelaySend[part].push_back({currentTick, val}); break;
+                                case 0x15: m_expression.sysPartMode[part].push_back({currentTick, val}); break;
+                            }
+                        }
+                    }
+                } else if (mfr == 0x43) {
+                    m_hasYamahaXG = true;
+                }
                 continue;
             }
 

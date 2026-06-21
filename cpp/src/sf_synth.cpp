@@ -7,6 +7,8 @@
 #include <chrono>
 #include <cstring>
 #include <numeric>
+#include <tuple>
+#include <iterator>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -21,11 +23,12 @@ bool SFSynthesizer::init(const SoundFont& sf2, int sampleRate) {
     m_fallbackMode = false;
     m_sampleRate = sampleRate;
     m_channels.resize(16);
-    m_voices.resize(MAX_VOICES);
+    m_voices.clear();
+    m_voices.reserve(1024);
     m_reverb.init(sampleRate);
     m_chorus.init(sampleRate);
     m_delay.init(sampleRate);
-    std::cout << "[Synth] Initialized (" << MAX_VOICES << " voices, " << sampleRate << " Hz)" << std::endl;
+    std::cout << "[Synth] Initialized (dynamic voices, " << sampleRate << " Hz)" << std::endl;
     return true;
 }
 
@@ -34,7 +37,8 @@ bool SFSynthesizer::initFallback(int sampleRate) {
     m_fallbackMode = true;
     m_sampleRate = sampleRate;
     m_channels.resize(16);
-    m_voices.resize(MAX_VOICES);
+    m_voices.clear();
+    m_voices.reserve(1024);
     std::cout << "[Synth] Fallback mode (sine waves, " << sampleRate << " Hz)" << std::endl;
     return true;
 }
@@ -80,108 +84,136 @@ void SFSynthesizer::buildPresetZones(int channel) {
                     presets[pIdx + 1].presetBagNdx : pBags.size();
     int pBank = presets[pIdx].bank;
 
-    int zoneCount = 0;
-    for (size_t b = bagStart; b < bagEnd; b++) {
-        size_t genEnd = (b + 1 < pBags.size()) ? pBags[b + 1].genNdx : pGens.size();
-
-        // ── preset bag generators ──
+    struct GenState {
+        ResolvedZone zone;
         int instIdx = -1;
-        int pkLow = -1, pkHigh = -1, pvLow = -1, pvHigh = -1;
-        double pAtten = 0, pPan = 0, pRoot = -1, pTune = 0;
-        double pAtk = 0, pDec = 0, pSus = 1.0, pRel = 0, pFc = -1, pQ = -1;
+        int64_t startOffset = 0;
+        int64_t endOffset = 0;
+        int64_t startLoopOffset = 0;
+        int64_t endLoopOffset = 0;
+        bool hasSample = false;
+        bool hasInstrument = false;
+        bool hasKeyRange = false;
+        bool hasVelRange = false;
+        bool hasRootKey = false;
+        bool hasAttack = false;
+        bool hasDecay = false;
+        bool hasSustain = false;
+        bool hasRelease = false;
+        bool hasFilterQ = false;
+        bool hasLoopMode = false;
+    };
 
-        for (size_t g = pBags[b].genNdx; g < genEnd; g++) {
-            const auto& gen = pGens[g];
-            int16_t a = gen.amount;
-            switch (gen.oper) {
-                case 5: pkLow = a & 0x7F; pkHigh = (a >> 8) & 0x7F; break;
-                case 6: pvLow = a & 0x7F; pvHigh = (a >> 8) & 0x7F; break;
-                case 10: pAtten = a / 10.0; break;
-                case 17: pPan = a / 1000.0; break;
-                case 26: pRoot = a; break;
-                case 24: pTune = a / 100.0; break;
-                case 34: pAtk = timecentsToSeconds(a); break;
-                case 36: pDec = timecentsToSeconds(a); break;
-                case 37: pSus = 1.0 - a / 1000.0; break;
-                case 38: pRel = timecentsToSeconds(a); break;
-                case 41: instIdx = a; break;
-                case 43: pFc = std::pow(2.0, a / 1200.0) * 8.176; break;
-                case 44: pQ = a / 10.0; break;
-                default: break;
-            }
+    auto applyGen = [&](GenState& st, const SF2Generator& gen) {
+        int16_t a = gen.amount;
+        uint16_t raw = (uint16_t)gen.amount;
+        switch (gen.oper) {
+            case 0: st.startOffset += a; break;
+            case 1: st.endOffset += a; break;
+            case 2: st.startLoopOffset += a; break;
+            case 3: st.endLoopOffset += a; break;
+            case 4: st.startOffset += (int64_t)a * 32768; break;
+            case 8: st.zone.filterFc = std::pow(2.0, a / 1200.0) * 8.176; st.zone.filterActive = true; break;
+            case 9: st.zone.filterQ = a / 10.0; st.hasFilterQ = true; break;
+            case 12: st.endOffset += (int64_t)a * 32768; break;
+            case 17: st.zone.pan += a / 500.0; break;
+            case 34: st.zone.attack = timecentsToSeconds(a); st.hasAttack = true; break;
+            case 36: st.zone.decay = timecentsToSeconds(a); st.hasDecay = true; break;
+            case 37: st.zone.sustain = attenuateDb(a / 10.0); st.hasSustain = true; break;
+            case 38: st.zone.release = timecentsToSeconds(a); st.hasRelease = true; break;
+            case 41: st.instIdx = a; st.hasInstrument = true; break;
+            case 43: st.zone.keyLow = raw & 0xFF; st.zone.keyHigh = (raw >> 8) & 0xFF; st.hasKeyRange = true; break;
+            case 44: st.zone.velLow = raw & 0xFF; st.zone.velHigh = (raw >> 8) & 0xFF; st.hasVelRange = true; break;
+            case 45: st.startLoopOffset += (int64_t)a * 32768; break;
+            case 48: st.zone.attenuation += a / 10.0; break;
+            case 50: st.endLoopOffset += (int64_t)a * 32768; break;
+            case 51: st.zone.coarseTune += a; break;
+            case 52: st.zone.fineTune += a; break;
+            case 53: st.zone.sampleIndex = a; st.hasSample = true; break;
+            case 54: st.zone.loopMode = a & 0x3; st.hasLoopMode = true; break;
+            case 57: st.zone.exclusiveClass = a; break;
+            case 58: st.zone.rootKey = a; st.hasRootKey = true; break;
+            default: break;
         }
+    };
+
+    auto readBag = [&](const auto& bags, const auto& gens, size_t idx) {
+        GenState st;
+        if (idx >= bags.size()) return st;
+        size_t genEnd = (idx + 1 < bags.size()) ? bags[idx + 1].genNdx : gens.size();
+        for (size_t g = bags[idx].genNdx; g < genEnd && g < gens.size(); g++) {
+            applyGen(st, gens[g]);
+        }
+        return st;
+    };
+
+    auto mergeState = [](const GenState& a, const GenState& b) {
+        GenState r = a;
+        if (b.hasKeyRange) {
+            r.zone.keyLow = b.zone.keyLow;
+            r.zone.keyHigh = b.zone.keyHigh;
+            r.hasKeyRange = true;
+        }
+        if (b.hasVelRange) {
+            r.zone.velLow = b.zone.velLow;
+            r.zone.velHigh = b.zone.velHigh;
+            r.hasVelRange = true;
+        }
+        r.zone.attenuation += b.zone.attenuation;
+        r.zone.pan += b.zone.pan;
+        if (b.hasRootKey) {
+            r.zone.rootKey = b.zone.rootKey;
+            r.hasRootKey = true;
+        }
+        r.zone.fineTune += b.zone.fineTune;
+        r.zone.coarseTune += b.zone.coarseTune;
+        if (b.hasAttack) { r.zone.attack = b.zone.attack; r.hasAttack = true; }
+        if (b.hasDecay) { r.zone.decay = b.zone.decay; r.hasDecay = true; }
+        if (b.hasSustain) { r.zone.sustain = b.zone.sustain; r.hasSustain = true; }
+        if (b.hasRelease) { r.zone.release = b.zone.release; r.hasRelease = true; }
+        if (b.zone.filterActive) {
+            r.zone.filterFc = b.zone.filterFc;
+            r.zone.filterActive = true;
+        }
+        if (b.hasFilterQ) { r.zone.filterQ = b.zone.filterQ; r.hasFilterQ = true; }
+        if (b.zone.sampleIndex >= 0) r.zone.sampleIndex = b.zone.sampleIndex;
+        if (b.hasLoopMode) { r.zone.loopMode = b.zone.loopMode; r.hasLoopMode = true; }
+        if (b.zone.exclusiveClass != 0) r.zone.exclusiveClass = b.zone.exclusiveClass;
+        if (b.hasInstrument) { r.instIdx = b.instIdx; r.hasInstrument = true; }
+        if (b.hasSample) r.hasSample = true;
+        r.startOffset += b.startOffset;
+        r.endOffset += b.endOffset;
+        r.startLoopOffset += b.startLoopOffset;
+        r.endLoopOffset += b.endLoopOffset;
+        return r;
+    };
+
+    int zoneCount = 0;
+    GenState presetGlobal;
+    for (size_t b = bagStart; b < bagEnd && b < pBags.size(); b++) {
+        GenState pLocal = readBag(pBags, pGens, b);
+        if (!pLocal.hasInstrument) {
+            presetGlobal = mergeState(presetGlobal, pLocal);
+            continue;
+        }
+        GenState pState = mergeState(presetGlobal, pLocal);
+        int instIdx = pState.instIdx;
         if (instIdx < 0 || instIdx >= (int)instruments.size()) continue;
 
-        // ── instrument generators (resolve zone) ──
         size_t ibStart = instruments[instIdx].instBagNdx;
         size_t ibEnd = (instIdx + 1 < (int)instruments.size()) ?
                        instruments[instIdx + 1].instBagNdx : iBags.size();
 
-        // First bag is default generators; inherit from it.
-        ResolvedZone def{};
-        for (size_t ig = iBags[ibStart].genNdx;
-             ig < ((ibStart + 1 < iBags.size()) ? iBags[ibStart + 1].genNdx : iGens.size()); ig++) {
-            const auto& gen = iGens[ig];
-            int16_t a = gen.amount;
-            switch (gen.oper) {
-                case 5: def.keyLow = a & 0x7F; def.keyHigh = (a >> 8) & 0x7F; break;
-                case 6: def.velLow = a & 0x7F; def.velHigh = (a >> 8) & 0x7F; break;
-                case 10: def.attenuation = a / 10.0; break;
-                case 17: def.pan = a / 1000.0; break;
-                case 24: def.fineTune = a / 100.0; break;
-                case 26: def.rootKey = a; break;
-                case 34: def.attack = timecentsToSeconds(a); break;
-                case 36: def.decay = timecentsToSeconds(a); break;
-                case 37: def.sustain = 1.0 - a / 1000.0; break;
-                case 38: def.release = timecentsToSeconds(a); break;
-                case 43: def.filterFc = std::pow(2.0, a / 1200.0) * 8.176; break;
-                case 44: def.filterQ = a / 10.0; break;
-                case 53: def.sampleIndex = a; break;
-                default: break;
-            }
-        }
-
-        for (size_t ib = ibStart + 1; ib < ibEnd; ib++) {
-            size_t igEnd = (ib + 1 < iBags.size()) ? iBags[ib + 1].genNdx : iGens.size();
-
-            ResolvedZone z = def;
-
-            for (size_t ig = iBags[ib].genNdx; ig < igEnd; ig++) {
-                const auto& gen = iGens[ig];
-                int16_t a = gen.amount;
-                switch (gen.oper) {
-                    case 5: z.keyLow = a & 0x7F; z.keyHigh = (a >> 8) & 0x7F; break;
-                    case 6: z.velLow = a & 0x7F; z.velHigh = (a >> 8) & 0x7F; break;
-                    case 10: z.attenuation = a / 10.0; break;
-                    case 17: z.pan = a / 1000.0; break;
-                    case 24: z.fineTune = a / 100.0; break;
-                    case 26: z.rootKey = a; break;
-                    case 34: z.attack = timecentsToSeconds(a); break;
-                    case 36: z.decay = timecentsToSeconds(a); break;
-                    case 37: z.sustain = 1.0 - a / 1000.0; break;
-                    case 38: z.release = timecentsToSeconds(a); break;
-                    case 43: z.filterFc = std::pow(2.0, a / 1200.0) * 8.176; z.filterActive = true; break;
-                    case 44: z.filterQ = a / 10.0; break;
-                    case 53: z.sampleIndex = a; break;
-                    case 57: z.exclusiveClass = a; break; // exclusive class (hi-hat choke)
-                    default: break;
-                }
+        GenState instGlobal;
+        for (size_t ib = ibStart; ib < ibEnd && ib < iBags.size(); ib++) {
+            GenState iLocal = readBag(iBags, iGens, ib);
+            if (!iLocal.hasSample) {
+                instGlobal = mergeState(instGlobal, iLocal);
+                continue;
             }
 
-            // Apply preset overrides
-            if (pkLow >= 0) { z.keyLow = pkLow; z.keyHigh = pkHigh; }
-            if (pvLow >= 0) { z.velLow = pvLow; z.velHigh = pvHigh; }
-            z.attenuation += pAtten;
-            z.pan += pPan;
-            if (pRoot >= 0) z.rootKey = pRoot;
-            z.fineTune += pTune;
-            if (pAtk > 0) z.attack = pAtk;
-            if (pDec > 0) z.decay = pDec;
-            if (pSus < 1.0) z.sustain = pSus;
-            if (pRel > 0) z.release = pRel;
-            if (pFc >= 0) z.filterFc = pFc;
-            if (pQ >= 0) z.filterQ = pQ;
-
+            GenState state = mergeState(pState, mergeState(instGlobal, iLocal));
+            ResolvedZone z = state.zone;
             if (z.sampleIndex < 0 || z.sampleIndex >= (int)samples.size()) continue;
 
             const auto& s = samples[z.sampleIndex];
@@ -210,17 +242,25 @@ void SFSynthesizer::buildPresetZones(int channel) {
                 }
             }
 
-            z.sampleRate = s.sampleRate;
-            if (z.rootKey < 0) z.rootKey = (s.originalKey > 0) ? s.originalKey : 60.0;
-            z.rootKey += z.fineTune;
-            if (s.correction != 0) z.rootKey += s.correction / 100.0; // SF2 correction (±cents → semitones)
+            z.sampleRate = s.sampleRate > 0 ? s.sampleRate : 44100;
+            if (z.rootKey < 0) z.rootKey = (s.originalKey < 128) ? s.originalKey : 60.0;
+            z.rootKey += z.coarseTune + (z.fineTune + s.correction) / 100.0;
 
-            z.sampleStart = s.start;
-            z.sampleEnd = s.end;
-            z.loopStart = s.startLoop;
-            z.loopEnd = s.endLoop;
-            z.loop = ((s.sampleType >> 8) & 0xFF) == 1 || ((s.sampleType >> 8) & 0xFF) == 3; // mode 1 or 3
-            z.loopMode = (s.sampleType >> 8) & 0xFF;
+            int64_t start = (int64_t)s.start + state.startOffset;
+            int64_t end = (int64_t)s.end + state.endOffset;
+            int64_t loopStart = (int64_t)s.startLoop + state.startLoopOffset;
+            int64_t loopEnd = (int64_t)s.endLoop + state.endLoopOffset;
+            int64_t sdSize = (int64_t)m_sf2->sampleDataSize();
+            start = std::clamp(start, (int64_t)0, sdSize);
+            end = std::clamp(end, start + 1, sdSize);
+            loopStart = std::clamp(loopStart, start, end);
+            loopEnd = std::clamp(loopEnd, loopStart, end);
+
+            z.sampleStart = (uint32_t)start;
+            z.sampleEnd = (uint32_t)end;
+            z.loopStart = (uint32_t)loopStart;
+            z.loopEnd = (uint32_t)loopEnd;
+            z.loop = (z.loopMode == 1 || z.loopMode == 3) && z.loopEnd > z.loopStart + 1;
 
             m_channelZones[channel].push_back(z);
             zoneCount++;
@@ -273,174 +313,74 @@ bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZon
 }
 
 void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, int velocity) {
-    // Find a free voice
-    for (auto& v : m_voices) {
-        if (!v.active) {
-            v.active = true;
-            v.releasing = false;
-            v.channel = channel;
-            v.note = note;
-            v.velocity = velocity;
-            v.sampleIndex = zone.sampleIndex;
-            v.sampleStart = zone.sampleStart;
-            v.sampleEnd = zone.sampleEnd;
-            v.loopStart = zone.loopStart;
-            v.loopEnd = zone.loopEnd;
-            v.loop = zone.loop;
-            v.loopMode = zone.loopMode;
-            v.exclusiveClass = zone.exclusiveClass;
-            v.sampleRate = zone.sampleRate;
-            v.position = 0.0;
-
-            // Pitch ratio
-            double noteFreq = 440.0 * std::pow(2.0, (note - 69) / 12.0);
-            double rootFreq = 440.0 * std::pow(2.0, (zone.rootKey - 69) / 12.0);
-            double pitchBend = getEffectivePitchBend(channel);
-            double tuning = getEffectiveTuning(channel);
-            bool isDrumChannel = (m_channels[channel].bank == 128);
-            if (isDrumChannel) {
-                // ドラム: サンプルを自然ピッチで再生（ノート番号は楽器選択のみ）
-                v.pitchRatio = zone.sampleRate / (double)m_sampleRate;
-            } else {
-                v.pitchRatio = (noteFreq / rootFreq) * std::pow(2.0, (pitchBend + tuning) / 12.0)
-                               * (zone.sampleRate / (double)m_sampleRate);
-            }
-
-            // Amplitude
-            double velAmp = (double)velocity / 127.0;
-            double attenLin = attenuateDb(zone.attenuation);
-            v.amplitude = velAmp * attenLin;
-
-            // Pan
-            double chPan = (m_channels[channel].pan - 64) / 64.0;
-            v.zonePan = std::clamp(zone.pan, -1.0, 1.0);
-            v.pan = std::clamp(v.zonePan + chPan, -1.0, 1.0);
-
-            // Envelope: timecents → rate per sample
-            double aTime = std::max(zone.attack, 0.001);
-            double dTime = std::max(zone.decay, 0.001);
-            double rTime = std::max(zone.release, 0.001);
-            v.attackRate = 1.0 / (aTime * m_sampleRate);
-            v.decayRate = (1.0 - zone.sustain) / (dTime * m_sampleRate);
-            v.sustainLevel = std::clamp(zone.sustain, 0.0, 1.0);
-            v.releaseRate = 1.0 / (rTime * m_sampleRate);
-            v.envLevel = 0.0;
-            v.releaseLevel = 1.0;
-
-            // Filter
-            v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
-            v.filterQ = std::max(0.5, zone.filterQ);
-            v.filterActive = zone.filterActive;
-            std::fill(v.filterState, v.filterState + 4, 0.0);
-
-            // Vibrato depth from modulation (CC1)
-            v.vibratoDepth = m_channels[channel].modulation / 127.0 * 2.0; // max 2 semitones
-
-            // Store root key for live pitch calculation
-            v.rootKey = zone.rootKey;
-
-            // basePitchRatio = pitchRatio (for portamento reference)
-            v.basePitchRatio = v.pitchRatio;
-
-            // Exclusive class: ドラム(bank==128)のみ適用。メロディゾーンでは無効化
-            if (zone.exclusiveClass > 0 && m_channels[channel].bank == 128) {
-                for (auto& other : m_voices) {
-                    if (&other != &v && other.active && other.channel == channel &&
-                        other.exclusiveClass == zone.exclusiveClass && !other.releasing) {
-                        other.releasing = true;
-                        other.releaseLevel = other.envLevel;
-                        other.releaseRate = 1.0 / (0.01 * m_sampleRate); // 10ms fade
-                    }
-                }
-            }
-
-            return;
-        }
+    auto freeIt = std::find_if(m_voices.begin(), m_voices.end(),
+                               [](const SF2Voice& v) { return !v.active; });
+    if (freeIt == m_voices.end()) {
+        m_voices.emplace_back();
+        freeIt = std::prev(m_voices.end());
     }
-    // No free voice — steal oldest released, then oldest active
-    uint32_t oldestAge = UINT32_MAX;
-    int stealIdx = -1;
-    for (int i = 0; i < (int)m_voices.size(); i++) {
-        auto& v = m_voices[i];
-        if (v.releasing && v.age < oldestAge) {
-            oldestAge = v.age;
-            stealIdx = i;
-        }
+
+    SF2Voice& v = *freeIt;
+    v = SF2Voice{};
+    v.active = true;
+    v.channel = channel;
+    v.note = note;
+    v.velocity = velocity;
+    v.sampleIndex = zone.sampleIndex;
+    v.sampleStart = zone.sampleStart;
+    v.sampleEnd = zone.sampleEnd;
+    v.loopStart = zone.loopStart;
+    v.loopEnd = zone.loopEnd;
+    v.loop = zone.loop;
+    v.loopMode = zone.loopMode;
+    v.exclusiveClass = zone.exclusiveClass;
+    v.sampleRate = zone.sampleRate;
+
+    double noteFreq = 440.0 * std::pow(2.0, (note - 69) / 12.0);
+    double rootFreq = 440.0 * std::pow(2.0, (zone.rootKey - 69) / 12.0);
+    double pitchBend = getEffectivePitchBend(channel);
+    double tuning = getEffectiveTuning(channel);
+    bool isDrumChannel = (m_channels[channel].bank == 128);
+    if (isDrumChannel) {
+        v.pitchRatio = zone.sampleRate / (double)m_sampleRate;
+    } else {
+        v.pitchRatio = (noteFreq / rootFreq) * std::pow(2.0, (pitchBend + tuning) / 12.0)
+                       * (zone.sampleRate / (double)m_sampleRate);
     }
-    if (stealIdx < 0) {
-        // No releasing voices, steal oldest active
-        for (int i = 0; i < (int)m_voices.size(); i++) {
-            auto& v = m_voices[i];
-            if (v.active && v.age < oldestAge) {
-                oldestAge = v.age;
-                stealIdx = i;
-            }
-        }
-    }
-    if (stealIdx >= 0) {
-        // リリース中ボイスを優先的に解放
-        if (m_voices[stealIdx].releasing) {
-            m_voices[stealIdx].active = false;
-        } else {
-            // ハードカットだがリリース中に切り替える
-            m_voices[stealIdx].releasing = true;
-            m_voices[stealIdx].releaseLevel = m_voices[stealIdx].envLevel;
-            m_voices[stealIdx].releaseRate = 1.0 / (0.01 * m_sampleRate); // 10ms フェードアウト
-        }
-        // Re-enter the loop to find the now-free voice
-        for (auto& v : m_voices) {
-            if (!v.active) {
-                v.active = true;
-                v.releasing = false;
-                v.held = false;
-                v.channel = channel;
-                v.note = note;
-                v.velocity = velocity;
-                v.sampleIndex = zone.sampleIndex;
-                v.sampleStart = zone.sampleStart;
-                v.sampleEnd = zone.sampleEnd;
-                v.loopStart = zone.loopStart;
-                v.loopEnd = zone.loopEnd;
-                v.loop = zone.loop;
-                v.loopMode = zone.loopMode;
-                v.exclusiveClass = zone.exclusiveClass;
-                v.sampleRate = zone.sampleRate;
-                v.position = 0.0;
-                double noteFreq = 440.0 * std::pow(2.0, (note - 69) / 12.0);
-                double rootFreq = 440.0 * std::pow(2.0, (zone.rootKey - 69) / 12.0);
-                double pitchBend = getEffectivePitchBend(channel);
-                double tuning = getEffectiveTuning(channel);
-                bool isDrumChannel = (m_channels[channel].bank == 128);
-                if (isDrumChannel) {
-                    v.pitchRatio = zone.sampleRate / (double)m_sampleRate;
-                } else {
-                    v.pitchRatio = (noteFreq / rootFreq) * std::pow(2.0, (pitchBend + tuning) / 12.0)
-                                   * (zone.sampleRate / (double)m_sampleRate);
-                }
-                double velAmp = (double)velocity / 127.0;
-                double attenLin = attenuateDb(zone.attenuation);
-                v.amplitude = velAmp * attenLin;
-                double chPan = (m_channels[channel].pan - 64) / 64.0;
-                v.zonePan = zone.pan;
-                v.pan = std::clamp(zone.pan + chPan, -1.0, 1.0);
-                double aTime = std::max(zone.attack, 0.001);
-                double dTime = std::max(zone.decay, 0.001);
-                double rTime = std::max(zone.release, 0.001);
-                v.attackRate = 1.0 / (aTime * m_sampleRate);
-                v.decayRate = (1.0 - zone.sustain) / (dTime * m_sampleRate);
-                v.sustainLevel = std::clamp(zone.sustain, 0.0, 1.0);
-                v.releaseRate = 1.0 / (rTime * m_sampleRate);
-                v.envLevel = 0.0;
-                v.releaseLevel = 1.0;
-                v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
-                v.filterQ = std::max(0.5, zone.filterQ);
-                v.filterActive = zone.filterActive;
-                std::fill(v.filterState, v.filterState + 4, 0.0);
-                v.vibratoDepth = m_channels[channel].modulation / 127.0 * 2.0;
-                v.basePitchRatio = v.pitchRatio;
-                v.rootKey = zone.rootKey;
-                v.portamentoProgress = 1.0;
-                return;
+
+    double velAmp = (double)velocity / 127.0;
+    double attenLin = attenuateDb(zone.attenuation);
+    v.amplitude = velAmp * attenLin;
+
+    double chPan = (m_channels[channel].pan - 64) / 64.0;
+    v.zonePan = std::clamp(zone.pan, -1.0, 1.0);
+    v.pan = std::clamp(v.zonePan + chPan, -1.0, 1.0);
+
+    double aTime = std::max(zone.attack, 0.001);
+    double dTime = std::max(zone.decay, 0.001);
+    double rTime = std::max(zone.release, 0.001);
+    v.attackRate = 1.0 / (aTime * m_sampleRate);
+    v.decayRate = (1.0 - zone.sustain) / (dTime * m_sampleRate);
+    v.sustainLevel = std::clamp(zone.sustain, 0.0, 1.0);
+    v.releaseRate = 1.0 / (rTime * m_sampleRate);
+    v.releaseLevel = 1.0;
+
+    v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
+    v.filterQ = std::max(0.5, zone.filterQ);
+    v.filterActive = zone.filterActive;
+    std::fill(v.filterState, v.filterState + 4, 0.0);
+
+    v.vibratoDepth = m_channels[channel].modulation / 127.0 * 2.0;
+    v.rootKey = zone.rootKey;
+    v.basePitchRatio = v.pitchRatio;
+
+    if (zone.exclusiveClass > 0 && m_channels[channel].bank == 128) {
+        for (auto& other : m_voices) {
+            if (&other != &v && other.active && other.channel == channel &&
+                other.exclusiveClass == zone.exclusiveClass && !other.releasing) {
+                other.releasing = true;
+                other.releaseLevel = other.envLevel;
+                other.releaseRate = 1.0 / (0.01 * m_sampleRate);
             }
         }
     }
@@ -450,34 +390,40 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
 
 void SFSynthesizer::noteOn(int channel, int note, int velocity) {
     if (m_fallbackMode) {
-        for (auto& v : m_voices) {
-            if (!v.active) {
-                v.active = true;
-                v.releasing = false;
-                v.channel = channel;
-                v.note = note;
-                v.velocity = velocity;
-                v.position = 0.0;
-                v.pitchRatio = 440.0 * std::pow(2.0, (note - 69) / 12.0) / (double)m_sampleRate;
-                v.amplitude = (double)velocity / 127.0 * 0.3;
-                double chPan = (m_channels[channel].pan - 64) / 64.0;
-                v.zonePan = 0.0;
-                v.pan = std::clamp(chPan, -1.0, 1.0);
-                v.attackRate = 1.0 / (0.002 * m_sampleRate);
-                v.decayRate = 0.3 / (0.1 * m_sampleRate);
-                v.sustainLevel = 0.7;
-                v.releaseRate = 1.0 / (0.05 * m_sampleRate);
-                v.envLevel = 0.0;
-                v.releaseLevel = 1.0;
-                v.sampleIndex = -1;
-                return;
-            }
+        auto freeIt = std::find_if(m_voices.begin(), m_voices.end(),
+                                   [](const SF2Voice& v) { return !v.active; });
+        if (freeIt == m_voices.end()) {
+            m_voices.emplace_back();
+            freeIt = std::prev(m_voices.end());
         }
+        SF2Voice& v = *freeIt;
+        v = SF2Voice{};
+        v.active = true;
+        v.channel = channel;
+        v.note = note;
+        v.velocity = velocity;
+        v.pitchRatio = 440.0 * std::pow(2.0, (note - 69) / 12.0) / (double)m_sampleRate;
+        v.amplitude = (double)velocity / 127.0 * 0.3;
+        double chPan = (m_channels[channel].pan - 64) / 64.0;
+        v.pan = std::clamp(chPan, -1.0, 1.0);
+        v.attackRate = 1.0 / (0.002 * m_sampleRate);
+        v.decayRate = 0.3 / (0.1 * m_sampleRate);
+        v.sustainLevel = 0.7;
+        v.releaseRate = 1.0 / (0.05 * m_sampleRate);
+        v.releaseLevel = 1.0;
+        v.sampleIndex = -1;
         return;
     }
 
-    ResolvedZone zone;
-    if (resolveNote(channel, note, velocity, zone)) {
+    std::vector<ResolvedZone> zones;
+    bool isDrum = (m_channels[channel].bank == 128);
+    for (const auto& z : m_channelZones[channel]) {
+        if (note < z.keyLow || note > z.keyHigh) continue;
+        if (velocity < z.velLow || velocity > z.velHigh) continue;
+        zones.push_back(z);
+    }
+
+    if (!zones.empty()) {
         // Find previous voice on this channel for portamento
         double prevPitchRatio = -1.0;
         for (auto& v : m_voices) {
@@ -486,7 +432,9 @@ void SFSynthesizer::noteOn(int channel, int note, int velocity) {
             }
         }
 
-        startVoice(zone, channel, note, velocity);
+        for (const auto& zone : zones) {
+            startVoice(zone, channel, note, velocity);
+        }
 
         // Setup portamento if enabled
         const auto& ch = m_channels[channel];
@@ -498,6 +446,10 @@ void SFSynthesizer::noteOn(int channel, int note, int velocity) {
                     break;
                 }
             }
+        }
+        if (!isDrum && m_channels[channel].program == 0 && note == 60) {
+            std::cout << "    [Resolve] ch=" << channel << " note=" << note
+                      << " vel=" << velocity << " -> " << zones.size() << " zones" << std::endl;
         }
     }
 }
@@ -652,9 +604,6 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
     if (!v.active) return;
 
     bool isDrumChannel = (m_channels[v.channel].bank == 128);
-    static double vibratoPhases[256] = {};
-    int vIdx = &v - m_voices.data();
-    if (vIdx < 0 || vIdx >= 256) vIdx = 0;
 
     // Update vibrato depth from CC1
     if (!isDrumChannel) {
@@ -679,9 +628,9 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
     // Update LFO phase for this voice
     double lfoValue = 0.0;
     if (v.vibratoDepth > 0.0 && !isDrumChannel) {
-        vibratoPhases[vIdx] += 2.0 * M_PI * 5.0 / m_sampleRate;
-        if (vibratoPhases[vIdx] > 2.0 * M_PI) vibratoPhases[vIdx] -= 2.0 * M_PI;
-        lfoValue = std::sin(vibratoPhases[vIdx]);
+        v.vibratoPhase += 2.0 * M_PI * 5.0 / m_sampleRate;
+        if (v.vibratoPhase > 2.0 * M_PI) v.vibratoPhase -= 2.0 * M_PI;
+        lfoValue = std::sin(v.vibratoPhase);
     }
     for (int i = 0; i < count; i++) {
         if (!v.active) break;
@@ -922,7 +871,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
     std::cout << "  [Render] " << notes.size() << " notes, " << (int)totalSec << " sec..." << std::flush;
 
     // Reset
-    for (auto& v : m_voices) v.active = false;
+    m_voices.clear();
     std::cout << "  [Debug] Voices reset" << std::endl;
 
     // 各チャンネルの初期program/bankを決定
@@ -987,6 +936,29 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         m_channels[ch].portamentoOn = expr.getValueAtTick(expr.portamentoOn[ch], firstNoteTick, 0);
         m_channels[ch].breath = expr.getValueAtTick(expr.breath[ch], firstNoteTick, 0);
         m_channels[ch].foot = expr.getValueAtTick(expr.foot[ch], firstNoteTick, 0);
+
+        std::vector<std::tuple<int64_t, int, int>> rpnInit;
+        auto addInitCC = [&](const std::vector<std::pair<int64_t, int>>& src, int cc) {
+            for (auto& [t, v] : src) if (t <= firstNoteTick) rpnInit.push_back({t, cc, v});
+        };
+        addInitCC(expr.nrpnMSB[ch], 99);
+        addInitCC(expr.nrpnLSB[ch], 98);
+        addInitCC(expr.rpnMSB[ch], 101);
+        addInitCC(expr.rpnLSB[ch], 100);
+        addInitCC(expr.dataEntryMSB[ch], 6);
+        addInitCC(expr.dataEntryLSB[ch], 38);
+        std::sort(rpnInit.begin(), rpnInit.end(), [](const auto& a, const auto& b) {
+            if (std::get<0>(a) != std::get<0>(b)) return std::get<0>(a) < std::get<0>(b);
+            auto priority = [](int cc) {
+                if (cc == 99 || cc == 98 || cc == 101 || cc == 100) return 0;
+                return 1;
+            };
+            return priority(std::get<1>(a)) < priority(std::get<1>(b));
+        });
+        for (auto& [t, cc, v] : rpnInit) {
+            (void)t;
+            controlChange(ch, cc, v);
+        }
     }
     std::cout << "  [Debug] Channel init done" << std::endl;
 
@@ -1201,6 +1173,12 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         // イベントをソート
         std::sort(events.begin(), events.end(), [](const BlockEvent& a, const BlockEvent& b) {
             if (a.sampleOffset != b.sampleOffset) return a.sampleOffset < b.sampleOffset;
+            auto ccPriority = [](int cc) {
+                if (cc == 99 || cc == 98 || cc == 101 || cc == 100) return 0; // NRPN/RPN select
+                if (cc == 6 || cc == 38 || cc == 96 || cc == 97) return 1;    // Data Entry
+                return 2;
+            };
+            if (a.type == 1 && b.type == 1) return ccPriority(a.p1) < ccPriority(b.p1);
             return a.type < b.type; // noteOff before CC before noteOn
         });
 
@@ -1466,6 +1444,29 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         chSynth.m_channels[0].delay = expr.getValueAtTick(expr.delayDepth[ch], firstNoteTick, 0);
         chSynth.m_channels[0].breath = expr.getValueAtTick(expr.breath[ch], firstNoteTick, 0);
         chSynth.m_channels[0].foot = expr.getValueAtTick(expr.foot[ch], firstNoteTick, 0);
+
+        std::vector<std::tuple<int64_t, int, int>> rpnInit;
+        auto addInitCC = [&](const std::vector<std::pair<int64_t, int>>& src, int cc) {
+            for (auto& [t, v] : src) if (t <= firstNoteTick) rpnInit.push_back({t, cc, v});
+        };
+        addInitCC(expr.nrpnMSB[ch], 99);
+        addInitCC(expr.nrpnLSB[ch], 98);
+        addInitCC(expr.rpnMSB[ch], 101);
+        addInitCC(expr.rpnLSB[ch], 100);
+        addInitCC(expr.dataEntryMSB[ch], 6);
+        addInitCC(expr.dataEntryLSB[ch], 38);
+        std::sort(rpnInit.begin(), rpnInit.end(), [](const auto& a, const auto& b) {
+            if (std::get<0>(a) != std::get<0>(b)) return std::get<0>(a) < std::get<0>(b);
+            auto priority = [](int cc) {
+                if (cc == 99 || cc == 98 || cc == 101 || cc == 100) return 0;
+                return 1;
+            };
+            return priority(std::get<1>(a)) < priority(std::get<1>(b));
+        });
+        for (auto& [t, cc, v] : rpnInit) {
+            (void)t;
+            chSynth.controlChange(0, cc, v);
+        }
 
         std::cout << "    Ch " << (ch + 1) << ": program=" << chProgram
                   << " bank=" << chBank
