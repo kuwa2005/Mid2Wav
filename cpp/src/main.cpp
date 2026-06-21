@@ -22,6 +22,7 @@ void printUsage() {
               << "                              Yamaha: MU-50, MU-80, MU-100, MU-128, MOTIF\n"
               << "  --channels                Split output per MIDI channel\n"
               << "  --pitch <semitones>       Transpose all notes (+12=+1oct, -12=-1oct)\n"
+              << "  --csv                     Output batch log CSV file\n"
               << "  --analyze                 Analyze only (no convert)\n"
               << "  --help, -h                Show this help\n";
 }
@@ -45,6 +46,7 @@ int main(int argc, char* argv[]) {
             else opts.sf2Path = v;
         }
         else if (a == "--channels") opts.channelSplit = true;
+        else if (a == "--csv") opts.csvLog = true;
         else if (a == "--pitch") opts.pitchShift = std::stoi(next());
         else if (a == "--device") {
             std::string v = next();

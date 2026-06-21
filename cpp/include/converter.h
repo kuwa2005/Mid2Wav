@@ -15,6 +15,7 @@ struct ConvertOptions {
     DeviceModel device = DeviceModel::GM;
     bool deviceAuto = true;
     int pitchShift = 0;
+    bool csvLog = false;
 };
 
 struct BatchLogEntry {

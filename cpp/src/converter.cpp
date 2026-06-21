@@ -202,7 +202,7 @@ int runConverter(const ConvertOptions& opts) {
         }
     }
 
-    BatchLogger logger(opts.outputPath);
+    BatchLogger* logger = opts.csvLog ? new BatchLogger(opts.outputPath) : nullptr;
     int success = 0, failed = 0;
 
     for (size_t idx = 0; idx < midiFiles.size(); idx++) {
@@ -219,7 +219,7 @@ int runConverter(const ConvertOptions& opts) {
             if (!midi.load(midiPath)) {
                 std::cerr << "  [ERROR] Failed to load MIDI" << std::endl;
                 log.status = "fail"; log.failReason = "Failed to load MIDI";
-                logger.addEntry(log); failed++;
+                if (logger) logger->addEntry(log); failed++;
                 continue;
             }
 
@@ -240,7 +240,7 @@ int runConverter(const ConvertOptions& opts) {
             if (opts.analyzeOnly) {
                 std::cout << formatAnalysisText(tracks, midi);
                 log.status = "success";
-                logger.addEntry(log);
+                if (logger) logger->addEntry(log);
                 success++;
                 continue;
             }
@@ -265,19 +265,22 @@ int runConverter(const ConvertOptions& opts) {
             log.processingTimeMs = std::chrono::duration_cast<std::chrono::milliseconds>(procEnd - procStart).count();
 
             std::cout << "  [Done] " << outPath << " (" << log.processingTimeMs << "ms)" << std::endl;
-            logger.addEntry(log);
+            if (logger) logger->addEntry(log);
             success++;
 
         } catch (const std::exception& e) {
             std::cerr << "  [ERROR] " << e.what() << std::endl;
             log.status = "fail"; log.failReason = e.what();
-            logger.addEntry(log);
+            if (logger) logger->addEntry(log);
             failed++;
         }
     }
 
-    logger.saveLog();
-    logger.printSummary();
+    if (logger) {
+        logger->saveLog();
+        logger->printSummary();
+        delete logger;
+    }
 
     auto endTime = std::chrono::steady_clock::now();
     std::cout << "\n[INFO] Total time: " << std::chrono::duration<double>(endTime - startTime).count() << " sec" << std::endl;
