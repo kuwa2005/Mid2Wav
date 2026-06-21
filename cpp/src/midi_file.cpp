@@ -175,11 +175,13 @@ void MidiFile::extractNotes() {
                 switch (cc) {
                     case 0: m_expression.addBankSelectMSB(channel, currentTick, val); break;
                     case 1: m_expression.addModulation(channel, currentTick, val); break;
+                    case 2: break; // Breath - parsed via getValueAtTick
+                    case 4: break; // Foot Controller - parsed via getValueAtTick
                     case 5: m_expression.addPortamentoTime(channel, currentTick, val); break;
                     case 7: m_expression.addVolume(channel, currentTick, val); break;
                     case 10: m_expression.addPan(channel, currentTick, val); break;
                     case 11: m_expression.addExpression(channel, currentTick, val); break;
-                    case 32: break;
+                    case 32: break; // Bank Select LSB (未対応だがパースは保持)
                     case 64: m_expression.addSustain(channel, currentTick, val); break;
                     case 65: m_expression.addPortamentoOn(channel, currentTick, val); break;
                     case 91: m_expression.addReverbDepth(channel, currentTick, val); break;

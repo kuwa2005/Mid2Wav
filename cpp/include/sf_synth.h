@@ -39,6 +39,7 @@ struct SF2Voice {
     uint32_t age = 0;            // Voice age for stealing priority
     double basePitchRatio = 1.0; // Target pitch ratio (for portamento)
     double rootKey = 60.0;       // Sample root key for pitch calculation
+    double zonePan = 0.0;        // SF2 zone pan (set at noteOn, preserved)
     double portamentoProgress = 1.0; // 0.0=old pitch, 1.0=new pitch
 };
 

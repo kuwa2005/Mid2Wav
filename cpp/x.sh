@@ -1,2 +1,2 @@
-./Mid2Wav --device SC-8850 -i ../input_midis/ -o ../output/
+./Mid2Wav --device SC-88VL -i ../input_midis/ -o ../output/
 

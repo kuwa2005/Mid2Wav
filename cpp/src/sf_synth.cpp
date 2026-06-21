@@ -292,7 +292,8 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
 
             // Pan
             double chPan = (m_channels[channel].pan - 64) / 64.0;
-            v.pan = std::clamp(zone.pan + chPan, -1.0, 1.0);
+            v.zonePan = std::clamp(zone.pan, -1.0, 1.0);
+            v.pan = std::clamp(v.zonePan + chPan, -1.0, 1.0);
 
             // Envelope: timecents → rate per sample
             double aTime = std::max(zone.attack, 0.001);
@@ -343,7 +344,7 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
         }
     }
     if (stealIdx >= 0) {
-        m_voices[stealIdx].active = false; // Hard cut
+        m_voices[stealIdx].active = false; // Hard cut（リリース中ボイスがなければ即座に解放）
         // Re-enter the loop to find the now-free voice
         for (auto& v : m_voices) {
             if (!v.active) {
@@ -414,6 +415,7 @@ void SFSynthesizer::noteOn(int channel, int note, int velocity) {
                 v.pitchRatio = 440.0 * std::pow(2.0, (note - 69) / 12.0) / (double)m_sampleRate;
                 v.amplitude = (double)velocity / 127.0 * 0.3;
                 double chPan = (m_channels[channel].pan - 64) / 64.0;
+                v.zonePan = 0.0;
                 v.pan = std::clamp(chPan, -1.0, 1.0);
                 v.attackRate = 1.0 / (0.002 * m_sampleRate);
                 v.decayRate = 0.3 / (0.1 * m_sampleRate);
@@ -514,8 +516,8 @@ void SFSynthesizer::controlChange(int channel, int cc, int value) {
         case 99: ch.rpnMSB = value; break;  // NRPN MSB
         case 100: ch.rpnLSB = value; break; // RPN LSB
         case 101: ch.rpnMSB = value; break; // RPN MSB
-        case 106: {
-            ch.rpnValue = (ch.rpnValue & 0x7F) | ((value & 0x7F) << 7); // Data Entry MSB (14bit)
+        case 6: {  // CC6: Data Entry MSB (RPN)
+            ch.rpnValue = (ch.rpnValue & 0x7F) | ((value & 0x7F) << 7); // 14bit構築
             // RPN処理
             if (ch.rpnMSB == 0 && ch.rpnLSB == 0) {
                 // RPN 0: Pitch Bend Sensitivity (0-24半音)
@@ -602,9 +604,9 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         if (v.portamentoProgress >= 1.0) v.basePitchRatio = v.pitchRatio;
     }
 
-    // Live pan update
+    // Live pan update (zone.pan + channel pan)
     double chPan = (m_channels[v.channel].pan - 64) / 64.0;
-    v.pan = chPan; // ライブ更新（遅延なし）
+    v.pan = std::clamp(v.zonePan + chPan, -1.0, 1.0);
 
     // Update LFO phase for this voice
     double lfoValue = 0.0;
@@ -881,9 +883,9 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         m_channels[ch].modulation = expr.getValueAtTick(expr.modulation[ch], firstNoteTick, 0);
         m_channels[ch].pitchBend = expr.getValueAtTick(expr.pitchBend[ch], firstNoteTick, 8192);
         m_channels[ch].pitchBendRange = expr.getValueAtTick(expr.pitchBendRange[ch], firstNoteTick, 2);
-        m_channels[ch].reverb = expr.getValueAtTick(expr.sysReverbLevel, firstNoteTick, 0);
-        m_channels[ch].chorus = expr.getValueAtTick(expr.sysChorusLevel, firstNoteTick, 0);
-        m_channels[ch].delay = expr.getValueAtTick(expr.sysDelayLevel, firstNoteTick, 0);
+        m_channels[ch].reverb = expr.getValueAtTick(expr.reverbDepth[ch], firstNoteTick, 0);
+        m_channels[ch].chorus = expr.getValueAtTick(expr.chorusDepth[ch], firstNoteTick, 0);
+        m_channels[ch].delay = expr.getValueAtTick(expr.delayDepth[ch], firstNoteTick, 0);
         m_channels[ch].portamentoTime = expr.getValueAtTick(expr.portamentoTime[ch], firstNoteTick, 0);
         m_channels[ch].portamentoOn = expr.getValueAtTick(expr.portamentoOn[ch], firstNoteTick, 0);
     }
@@ -1023,38 +1025,76 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             }
         }
 
-        // Note On: start new notes in this block
+        // Note On/Off を正確なサンプル位置で処理
+        // ブロック内の全ノートイベントを集めてソート
+        struct NoteEvent { int sampleOffset; int channel; int note; int velocity; bool isNoteOn; };
+        std::vector<NoteEvent> events;
+
         for (auto& n : sorted) {
             int noteStart = (int)(midi.tickToSeconds(n.startTime, n.track) * m_sampleRate);
             if (noteStart >= pos && noteStart < blockEnd) {
-                // Ensure correct preset loaded for this channel
                 int needKey = m_channels[n.channel].program * 256 + m_channels[n.channel].bank;
                 if (channelPresetKey[n.channel] != needKey) {
                     programChange(n.channel, m_channels[n.channel].program, m_channels[n.channel].bank);
                     channelPresetKey[n.channel] = needKey;
                 }
                 int shiftedNote = std::clamp(n.note + opts.pitchShift, 0, 127);
-                noteOn(n.channel, shiftedNote, n.velocity);
+                events.push_back({noteStart - pos, n.channel, shiftedNote, n.velocity, true});
                 active.push_back({&n, false});
             }
         }
 
-        // Note Off: end notes that finished
         for (auto& a : active) {
             if (a.offDone) continue;
             int noteEnd = (int)(midi.tickToSeconds(a.note->endTime, a.note->track) * m_sampleRate);
             if (noteEnd <= pos) {
                 int shiftedNote = std::clamp(a.note->note + opts.pitchShift, 0, 127);
-                noteOff(a.note->channel, shiftedNote);
+                events.push_back({0, a.note->channel, shiftedNote, 0, false});
                 a.offDone = true;
             }
         }
         active.erase(std::remove_if(active.begin(), active.end(),
                                     [](const ActiveNote& a) { return a.offDone; }), active.end());
 
-        // Process audio block
+        // イベントをソート
+        std::sort(events.begin(), events.end(), [](const NoteEvent& a, const NoteEvent& b) {
+            return a.sampleOffset < b.sampleOffset;
+        });
+
+        // ブロックをイベントで区切って処理
         std::vector<float> bl(blockLen, 0.0f), br(blockLen, 0.0f);
-        processBlock(bl, br, blockLen);
+        int segStart = 0;
+        int evIdx = 0;
+        while (segStart < blockLen) {
+            // 次のイベント位置を探す
+            int segEnd = blockLen;
+            if (evIdx < (int)events.size()) {
+                segEnd = std::min(segEnd, events[evIdx].sampleOffset);
+            }
+
+            // このセグメントを処理
+            if (segEnd > segStart) {
+                std::vector<float> segL(segEnd - segStart, 0.0f);
+                std::vector<float> segR(segEnd - segStart, 0.0f);
+                processBlock(segL, segR, segEnd - segStart);
+                for (int i = 0; i < segEnd - segStart; i++) {
+                    bl[segStart + i] = segL[i];
+                    br[segStart + i] = segR[i];
+                }
+            }
+
+            // イベントを適用
+            while (evIdx < (int)events.size() && events[evIdx].sampleOffset == segEnd) {
+                if (events[evIdx].isNoteOn) {
+                    noteOn(events[evIdx].channel, events[evIdx].note, events[evIdx].velocity);
+                } else {
+                    noteOff(events[evIdx].channel, events[evIdx].note);
+                }
+                evIdx++;
+            }
+
+            segStart = segEnd;
+        }
 
         // GS SysEx: エフェクトパラメータを適用
         // リバーブ
