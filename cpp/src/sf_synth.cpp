@@ -1490,6 +1490,21 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         // program変更を適用
         chSynth.programChange(0, chProgram, chBank);
 
+        // 全CCを初期状態に復元（メインパス :970-985 と同一）
+        chSynth.m_channels[0].volume = expr.getValueAtTick(expr.volume[ch], firstNoteTick, 100);
+        chSynth.m_channels[0].expression = expr.getValueAtTick(expr.expression[ch], firstNoteTick, 127);
+        chSynth.m_channels[0].pan = expr.getValueAtTick(expr.pan[ch], firstNoteTick, 64);
+        chSynth.m_channels[0].sustain = expr.getValueAtTick(expr.sustain[ch], firstNoteTick, 0);
+        chSynth.m_channels[0].modulation = expr.getValueAtTick(expr.modulation[ch], firstNoteTick, 0);
+        chSynth.m_channels[0].pitchBend = expr.getValueAtTick(expr.pitchBend[ch], firstNoteTick, 8192);
+        chSynth.m_channels[0].pitchBendRange = expr.getValueAtTick(expr.pitchBendRange[ch], firstNoteTick, 2);
+        chSynth.m_channels[0].reverb = expr.getValueAtTick(expr.reverbDepth[ch], firstNoteTick, 0);
+        chSynth.m_channels[0].chorus = expr.getValueAtTick(expr.chorusDepth[ch], firstNoteTick, 0);
+        chSynth.m_channels[0].delay = expr.getValueAtTick(expr.delayDepth[ch], firstNoteTick, 0);
+        chSynth.m_channels[0].breath = expr.getValueAtTick(expr.breath[ch], firstNoteTick, 0);
+        chSynth.m_channels[0].foot = expr.getValueAtTick(expr.foot[ch], firstNoteTick, 0);
+        chSynth.m_channels[0].bankLSB = expr.getValueAtTick(expr.bankSelectLSB[ch], firstNoteTick, 0);
+
         std::cout << "    Ch " << (ch + 1) << ": program=" << chProgram
                   << " bank=" << chBank
                   << " notes=" << noteCount << std::endl;
