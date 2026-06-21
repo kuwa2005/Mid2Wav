@@ -1533,25 +1533,48 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
             for (auto& [t, v] : expr.chorusDepth[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 93, v);
             for (auto& [t, v] : expr.delayDepth[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 94, v);
 
-            // noteOn を正確なサンプル位置で処理
+            // ノート＋CCイベントをサンプル精度で処理（メインパスと同じセグメント分割）
+            struct ChEvent { int sampleOffset; int type; int p1; int p2; };
+            std::vector<ChEvent> chEvents;
             for (auto& n : mapped) {
                 int noteStart = (int)(midi.tickToSeconds(n.startTime, n.track) * m_sampleRate);
                 if (noteStart >= pos && noteStart < blockEnd) {
-                    chSynth.noteOn(n.channel, std::clamp(n.note + pitchShift, 0, 127), n.velocity);
+                    int off = std::clamp(noteStart - pos, 0, blockLen - 1);
+                    chEvents.push_back({off, 1, std::clamp(n.note + pitchShift, 0, 127), n.velocity}); // noteOn
                 }
-            }
-
-            // noteOff を正確なサンプル位置で処理
-            for (auto& n : mapped) {
                 int noteEnd = (int)(midi.tickToSeconds(n.endTime, n.track) * m_sampleRate);
                 if (noteEnd >= pos && noteEnd < blockEnd) {
-                    int shiftedNote = std::clamp(n.note + pitchShift, 0, 127);
-                    chSynth.noteOff(n.channel, shiftedNote);
+                    int off = std::clamp(noteEnd - pos, 0, blockLen - 1);
+                    chEvents.push_back({off, 0, std::clamp(n.note + pitchShift, 0, 127), 0}); // noteOff
                 }
             }
+            std::sort(chEvents.begin(), chEvents.end(), [](const ChEvent& a, const ChEvent& b) {
+                if (a.sampleOffset != b.sampleOffset) return a.sampleOffset < b.sampleOffset;
+                return a.type < b.type;
+            });
 
             std::vector<float> bl(blockLen, 0.0f), br(blockLen, 0.0f);
-            chSynth.processBlock(bl, br, blockLen);
+            int segStart = 0;
+            int evIdx = 0;
+            while (segStart < blockLen) {
+                int segEnd = blockLen;
+                if (evIdx < (int)chEvents.size()) segEnd = std::min(segEnd, chEvents[evIdx].sampleOffset);
+                if (segEnd > segStart) {
+                    std::vector<float> segL(segEnd - segStart, 0.0f);
+                    std::vector<float> segR(segEnd - segStart, 0.0f);
+                    chSynth.processBlock(segL, segR, segEnd - segStart);
+                    for (int i = 0; i < segEnd - segStart; i++) {
+                        bl[segStart + i] = segL[i];
+                        br[segStart + i] = segR[i];
+                    }
+                }
+                while (evIdx < (int)chEvents.size() && chEvents[evIdx].sampleOffset == segEnd) {
+                    if (chEvents[evIdx].type == 0) chSynth.noteOff(0, chEvents[evIdx].p1);
+                    else chSynth.noteOn(0, chEvents[evIdx].p1, chEvents[evIdx].p2);
+                    evIdx++;
+                }
+                segStart = segEnd;
+            }
 
             // FX適用: Per-channel send量に応じたreverb/chorus/delay
             float chRev = chSynth.m_channels[0].reverb / 127.0f;
