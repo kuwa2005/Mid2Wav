@@ -225,6 +225,7 @@ int runConverter(const ConvertOptions& opts) {
             }
 
             auto tracks = midi.analyzeTracks();
+            std::cout << "  [Debug] Tracks analyzed, notes=" << midi.notes().size() << std::endl;
             log.notes = midi.notes().size();
             log.duration = midi.tickToSeconds(midi.notes().empty() ? 0 : midi.notes().back().endTime);
 

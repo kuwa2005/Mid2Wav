@@ -84,6 +84,7 @@ struct MidiExpression {
     std::vector<std::pair<int64_t, int>> sysDelayFeed;       // (tick, feedback)
     // GS SysEx: パート別エフェクト送り量
     std::vector<std::pair<int64_t, int>> sysPartReverbSend[16];  // (tick, level)
+    std::vector<std::pair<int64_t, int>> sysPartMode[16];  // (tick, mode) 0x00=Melody, 0x01=Rhythm
     std::vector<std::pair<int64_t, int>> sysPartChorusSend[16];  // (tick, level)
     std::vector<std::pair<int64_t, int>> sysPartDelaySend[16];   // (tick, level)
 
@@ -153,6 +154,7 @@ struct MidiExpression {
         std::sort(sysDelayFeed.begin(), sysDelayFeed.end(), cmp2);
         for (int ch = 0; ch < 16; ch++) {
             std::sort(sysPartReverbSend[ch].begin(), sysPartReverbSend[ch].end(), cmp2);
+            std::sort(sysPartMode[ch].begin(), sysPartMode[ch].end(), cmp2);
             std::sort(sysPartChorusSend[ch].begin(), sysPartChorusSend[ch].end(), cmp2);
             std::sort(sysPartDelaySend[ch].begin(), sysPartDelaySend[ch].end(), cmp2);
         }

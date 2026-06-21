@@ -302,6 +302,7 @@ void MidiFile::extractNotes() {
                                             case 0x03: m_expression.sysPartReverbSend[part].push_back({currentTick, val}); break;
                                             case 0x05: m_expression.sysPartChorusSend[part].push_back({currentTick, val}); break;
                                             case 0x06: m_expression.sysPartDelaySend[part].push_back({currentTick, val}); break;
+                                            case 0x15: m_expression.sysPartMode[part].push_back({currentTick, val}); break; // 0x00=Melody, 0x01=Rhythm
                                         }
                                     }
                                 }

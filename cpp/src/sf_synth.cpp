@@ -160,6 +160,7 @@ void SFSynthesizer::buildPresetZones(int channel) {
                     case 43: z.filterFc = std::pow(2.0, a / 1200.0) * 8.176; break;
                     case 44: z.filterQ = a / 10.0; break;
                     case 53: z.sampleIndex = a; break;
+                    case 57: z.exclusiveClass = a; break; // exclusive class (hi-hat choke)
                     default: break;
                 }
             }
@@ -280,6 +281,7 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
             v.loopEnd = zone.loopEnd;
             v.loop = zone.loop;
             v.loopMode = zone.loopMode;
+            v.exclusiveClass = zone.exclusiveClass;
             v.sampleRate = zone.sampleRate;
             v.position = 0.0;
 
@@ -332,6 +334,18 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
             // basePitchRatio = pitchRatio (for portamento reference)
             v.basePitchRatio = v.pitchRatio;
 
+            // Exclusive class: 同一チャンネルで同じexclusiveClassの他ボイスをリリース
+            if (zone.exclusiveClass > 0) {
+                for (auto& other : m_voices) {
+                    if (&other != &v && other.active && other.channel == channel &&
+                        other.exclusiveClass == zone.exclusiveClass && !other.releasing) {
+                        other.releasing = true;
+                        other.releaseLevel = other.envLevel;
+                        other.releaseRate = 1.0 / (0.01 * m_sampleRate); // 10ms fade
+                    }
+                }
+            }
+
             return;
         }
     }
@@ -381,6 +395,7 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
                 v.loopEnd = zone.loopEnd;
                 v.loop = zone.loop;
                 v.loopMode = zone.loopMode;
+                v.exclusiveClass = zone.exclusiveClass;
                 v.sampleRate = zone.sampleRate;
                 v.position = 0.0;
                 double noteFreq = 440.0 * std::pow(2.0, (note - 69) / 12.0);
@@ -903,9 +918,16 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             if (t <= firstNoteTick) initBank = v;
         }
 
-        // MIDIファイルのprogram/bankをそのまま信頼（GM規約の強制上書きなし）
+        // MIDIファイルのprogram/bankをそのまま信頼
         m_channels[ch].program = initProgram;
         m_channels[ch].bank = initBank;
+
+        // GS Part Mode SysEx: 0x01=リズム → bank=128に強制
+        int partMode = expr.getValueAtTick(expr.sysPartMode[ch], firstNoteTick, 0);
+        if (partMode == 1) {
+            m_channels[ch].bank = 128;
+        }
+
         programChange(ch, m_channels[ch].program, m_channels[ch].bank);
 
         // 全CCを初期状態に復元
@@ -1022,6 +1044,20 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             } else if (hasBankSelectInBlock) {
                 programChange(ch, m_channels[ch].program, m_channels[ch].bank);
                 channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
+            }
+            // GS Part Mode SysEx: ブロック内でリズムに変更された場合 bank=128
+            for (auto& [t, v] : expr.sysPartMode[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) {
+                    if (v == 1 && m_channels[ch].bank != 128) {
+                        m_channels[ch].bank = 128;
+                        programChange(ch, m_channels[ch].program, m_channels[ch].bank);
+                        channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
+                    } else if (v == 0 && m_channels[ch].bank == 128) {
+                        m_channels[ch].bank = 0;
+                        programChange(ch, m_channels[ch].program, m_channels[ch].bank);
+                        channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
+                    }
+                }
             }
             // Volume
             for (auto& [t, v] : expr.volume[ch]) {
