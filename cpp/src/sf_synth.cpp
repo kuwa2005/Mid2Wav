@@ -344,7 +344,15 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
         }
     }
     if (stealIdx >= 0) {
-        m_voices[stealIdx].active = false; // Hard cut（リリース中ボイスがなければ即座に解放）
+        // リリース中ボイスを優先的に解放
+        if (m_voices[stealIdx].releasing) {
+            m_voices[stealIdx].active = false;
+        } else {
+            // ハードカットだがリリース中に切り替える
+            m_voices[stealIdx].releasing = true;
+            m_voices[stealIdx].releaseLevel = m_voices[stealIdx].envLevel;
+            m_voices[stealIdx].releaseRate = 1.0 / (0.01 * m_sampleRate); // 10ms フェードアウト
+        }
         // Re-enter the loop to find the now-free voice
         for (auto& v : m_voices) {
             if (!v.active) {
@@ -1015,6 +1023,14 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             for (auto& [t, v] : expr.modulation[ch]) {
                 if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 1, v);
             }
+            // Breath (CC2)
+            for (auto& [t, v] : expr.breath[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 2, v);
+            }
+            // Foot Controller (CC4)
+            for (auto& [t, v] : expr.foot[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 4, v);
+            }
             // Portamento Time (CC5)
             for (auto& [t, v] : expr.portamentoTime[ch]) {
                 if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 5, v);
@@ -1022,6 +1038,22 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             // Portamento On/Off (CC65)
             for (auto& [t, v] : expr.portamentoOn[ch]) {
                 if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 65, v);
+            }
+            // Data Entry MSB (CC6) - RPN
+            for (auto& [t, v] : expr.dataEntryMSB[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 6, v);
+            }
+            // Data Entry LSB (CC38) - RPN
+            for (auto& [t, v] : expr.dataEntryLSB[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 38, v);
+            }
+            // NRPN LSB (CC98)
+            for (auto& [t, v] : expr.nrpnLSB[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 98, v);
+            }
+            // NRPN MSB (CC99)
+            for (auto& [t, v] : expr.nrpnMSB[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 99, v);
             }
         }
 

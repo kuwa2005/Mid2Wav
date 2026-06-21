@@ -175,15 +175,21 @@ void MidiFile::extractNotes() {
                 switch (cc) {
                     case 0: m_expression.addBankSelectMSB(channel, currentTick, val); break;
                     case 1: m_expression.addModulation(channel, currentTick, val); break;
-                    case 2: break; // Breath - parsed via getValueAtTick
-                    case 4: break; // Foot Controller - parsed via getValueAtTick
+                    case 2: m_expression.addBreath(channel, currentTick, val); break;
+                    case 4: m_expression.addFoot(channel, currentTick, val); break;
                     case 5: m_expression.addPortamentoTime(channel, currentTick, val); break;
+                    case 6: m_expression.addDataEntryMSB(channel, currentTick, val); break; // Data Entry MSB (RPN)
                     case 7: m_expression.addVolume(channel, currentTick, val); break;
                     case 10: m_expression.addPan(channel, currentTick, val); break;
                     case 11: m_expression.addExpression(channel, currentTick, val); break;
                     case 32: break; // Bank Select LSB (未対応だがパースは保持)
+                    case 38: m_expression.addDataEntryLSB(channel, currentTick, val); break; // Data Entry LSB (RPN)
                     case 64: m_expression.addSustain(channel, currentTick, val); break;
                     case 65: m_expression.addPortamentoOn(channel, currentTick, val); break;
+                    case 98: m_expression.addNrpnLSB(channel, currentTick, val); break;
+                    case 99: m_expression.addNrpnMSB(channel, currentTick, val); break;
+                    case 100: m_expression.addRpnLSB(channel, currentTick, val); break;
+                    case 101: m_expression.addRpnMSB(channel, currentTick, val); break;
                     case 91: m_expression.addReverbDepth(channel, currentTick, val); break;
                     case 93: m_expression.addChorusDepth(channel, currentTick, val); break;
                     case 94: m_expression.addDelayDepth(channel, currentTick, val); break;

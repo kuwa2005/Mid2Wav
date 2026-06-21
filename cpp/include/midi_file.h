@@ -52,6 +52,18 @@ struct MidiExpression {
     std::vector<std::pair<int64_t, int>> chorusDepth[16];
     // ディレイ深さ (CC94): (tick, value 0-127)
     std::vector<std::pair<int64_t, int>> delayDepth[16];
+    // ブレス (CC2): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> breath[16];
+    // フットコントローラ (CC4): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> foot[16];
+    // Data Entry MSB (CC6): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> dataEntryMSB[16];
+    // Data Entry LSB (CC38): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> dataEntryLSB[16];
+    // NRPN LSB (CC98): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> nrpnLSB[16];
+    // NRPN MSB (CC99): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> nrpnMSB[16];
     // GS SysEx: リバーブパラメータ
     std::vector<std::pair<int64_t, int>> sysReverbType;      // (tick, type 0-5)
     std::vector<std::pair<int64_t, int>> sysReverbLevel;     // (tick, level 0-127)
@@ -87,6 +99,14 @@ struct MidiExpression {
     void addReverbDepth(int ch, int64_t tick, int value) { reverbDepth[ch].push_back({tick, value}); }
     void addChorusDepth(int ch, int64_t tick, int value) { chorusDepth[ch].push_back({tick, value}); }
     void addDelayDepth(int ch, int64_t tick, int value) { delayDepth[ch].push_back({tick, value}); }
+    void addBreath(int ch, int64_t tick, int value) { breath[ch].push_back({tick, value}); }
+    void addFoot(int ch, int64_t tick, int value) { foot[ch].push_back({tick, value}); }
+    void addDataEntryMSB(int ch, int64_t tick, int value) { dataEntryMSB[ch].push_back({tick, value}); }
+    void addDataEntryLSB(int ch, int64_t tick, int value) { dataEntryLSB[ch].push_back({tick, value}); }
+    void addNrpnLSB(int ch, int64_t tick, int value) { nrpnLSB[ch].push_back({tick, value}); }
+    void addNrpnMSB(int ch, int64_t tick, int value) { nrpnMSB[ch].push_back({tick, value}); }
+    void addRpnLSB(int ch, int64_t tick, int value) { nrpnLSB[ch].push_back({tick, value}); }
+    void addRpnMSB(int ch, int64_t tick, int value) { nrpnMSB[ch].push_back({tick, value}); }
 
     void sort() {
         for (int ch = 0; ch < 16; ch++) {
@@ -105,6 +125,12 @@ struct MidiExpression {
             std::sort(reverbDepth[ch].begin(), reverbDepth[ch].end(), cmp);
             std::sort(chorusDepth[ch].begin(), chorusDepth[ch].end(), cmp);
             std::sort(delayDepth[ch].begin(), delayDepth[ch].end(), cmp);
+            std::sort(breath[ch].begin(), breath[ch].end(), cmp);
+            std::sort(foot[ch].begin(), foot[ch].end(), cmp);
+            std::sort(dataEntryMSB[ch].begin(), dataEntryMSB[ch].end(), cmp);
+            std::sort(dataEntryLSB[ch].begin(), dataEntryLSB[ch].end(), cmp);
+            std::sort(nrpnLSB[ch].begin(), nrpnLSB[ch].end(), cmp);
+            std::sort(nrpnMSB[ch].begin(), nrpnMSB[ch].end(), cmp);
         }
         // GS SysEx sort
         auto cmp2 = [](auto& a, auto& b) { return a.first < b.first; };
