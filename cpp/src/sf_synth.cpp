@@ -213,6 +213,7 @@ void SFSynthesizer::buildPresetZones(int channel) {
             z.sampleRate = s.sampleRate;
             if (z.rootKey < 0) z.rootKey = (s.originalKey > 0) ? s.originalKey : 60.0;
             z.rootKey += z.fineTune;
+            if (s.correction != 0) z.rootKey += s.correction / 100.0; // SF2 correction (±cents → semitones)
 
             z.sampleStart = s.start;
             z.sampleEnd = s.end;
@@ -1374,7 +1375,8 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
                                            const std::string& baseName,
                                            const std::string& outputDir,
                                            const MidiFile& midi,
-                                           int pitchShift) {
+                                           int pitchShift,
+                                           bool noNormalize) {
     if (notes.empty()) return;
 
     auto t0 = std::chrono::steady_clock::now();
@@ -1577,23 +1579,37 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
             std::vector<float> bl(blockLen, 0.0f), br(blockLen, 0.0f);
             chSynth.processBlock(bl, br, blockLen);
 
+            // FX適用: Per-channel send量に応じたreverb/chorus/delay
+            float chRev = chSynth.m_channels[0].reverb / 127.0f;
+            float chChr = chSynth.m_channels[0].chorus / 127.0f;
+            float chDly = chSynth.m_channels[0].delay / 127.0f;
+            if (chRev > 0.001f) chSynth.m_reverb.process(bl.data(), br.data(), blockLen, chRev * 0.6f);
+            if (chChr > 0.001f) chSynth.m_chorus.process(bl.data(), br.data(), blockLen, chChr * 127.0f);
+            if (chDly > 0.001f) {
+                float dlyTime = 0.1f + chSynth.m_delayTime * 0.9f;
+                float feedback = 0.2f + chSynth.m_delayFeedback * 0.5f;
+                chSynth.m_delay.process(bl.data(), br.data(), blockLen, dlyTime, feedback, chDly * 0.4f);
+            }
+
             for (int i = 0; i < blockLen; i++) {
                 left[pos + i] = bl[i];
                 right[pos + i] = br[i];
             }
         }
 
-        // 正規化
-        float peak = 1e-6f;
-        for (size_t i = 0; i < left.size(); i++) {
-            float lv = std::isfinite(left[i]) ? std::abs(left[i]) : 0.0f;
-            float rv = std::isfinite(right[i]) ? std::abs(right[i]) : 0.0f;
-            peak = std::max(peak, std::max(lv, rv));
-        }
-        float scale = (peak > 1e-6f) ? (0.95f / peak) : 1.0f;
-        for (size_t i = 0; i < left.size(); i++) {
-            left[i] = std::isfinite(left[i]) ? left[i] * scale : 0.0f;
-            right[i] = std::isfinite(right[i]) ? right[i] * scale : 0.0f;
+        // 正規化 (--no-normalize対応)
+        if (!noNormalize) {
+            float peak = 1e-6f;
+            for (size_t i = 0; i < left.size(); i++) {
+                float lv = std::isfinite(left[i]) ? std::abs(left[i]) : 0.0f;
+                float rv = std::isfinite(right[i]) ? std::abs(right[i]) : 0.0f;
+                peak = std::max(peak, std::max(lv, rv));
+            }
+            float scale = (peak > 1e-6f) ? (0.95f / peak) : 1.0f;
+            for (size_t i = 0; i < left.size(); i++) {
+                left[i] = std::isfinite(left[i]) ? left[i] * scale : 0.0f;
+                right[i] = std::isfinite(right[i]) ? right[i] * scale : 0.0f;
+            }
         }
 
         // ファイル名: DAW読み込み用（チャンネル番号+楽器名+プログラム番号）

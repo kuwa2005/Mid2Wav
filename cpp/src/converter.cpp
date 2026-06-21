@@ -257,7 +257,7 @@ int runConverter(const ConvertOptions& opts) {
             }
 
             if (runOpts.channelSplit) {
-                synth.renderToWavPerChannel(midi.notes(), fileName, runOpts.outputPath, midi, runOpts.pitchShift);
+                synth.renderToWavPerChannel(midi.notes(), fileName, runOpts.outputPath, midi, runOpts.pitchShift, runOpts.noNormalize);
             }
             synth.renderToWav(midi.notes(), outPath, runOpts, midi);
 

@@ -92,7 +92,8 @@ public:
                                const std::string& baseName,
                                const std::string& outputDir,
                                const MidiFile& midi,
-                               int pitchShift = 0);
+                               int pitchShift = 0,
+                               bool noNormalize = false);
 
     void noteOn(int channel, int note, int velocity);
     void noteOff(int channel, int note);
