@@ -214,7 +214,8 @@ void SFSynthesizer::buildPresetZones(int channel) {
             z.sampleEnd = s.end;
             z.loopStart = s.startLoop;
             z.loopEnd = s.endLoop;
-            z.loop = ((s.sampleType >> 8) & 0xFF) == 1; // SF2: mode 1 = loop continuously
+            z.loop = ((s.sampleType >> 8) & 0xFF) == 1 || ((s.sampleType >> 8) & 0xFF) == 3; // mode 1 or 3
+            z.loopMode = (s.sampleType >> 8) & 0xFF;
 
             m_channelZones[channel].push_back(z);
             zoneCount++;
@@ -278,6 +279,7 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
             v.loopStart = zone.loopStart;
             v.loopEnd = zone.loopEnd;
             v.loop = zone.loop;
+            v.loopMode = zone.loopMode;
             v.sampleRate = zone.sampleRate;
             v.position = 0.0;
 
@@ -378,6 +380,7 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
                 v.loopStart = zone.loopStart;
                 v.loopEnd = zone.loopEnd;
                 v.loop = zone.loop;
+                v.loopMode = zone.loopMode;
                 v.sampleRate = zone.sampleRate;
                 v.position = 0.0;
                 double noteFreq = 440.0 * std::pow(2.0, (note - 69) / 12.0);
@@ -668,7 +671,12 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         int idx = (int)absPos;
 
         // Loop / bounds check
-        if (v.loop && v.loopEnd > v.loopStart) {
+        bool shouldLoop = v.loop && v.loopEnd > v.loopStart;
+        // Mode 3: stop looping when releasing
+        if (shouldLoop && v.loopMode == 3 && v.releasing) {
+            shouldLoop = false;
+        }
+        if (shouldLoop) {
             uint32_t loopLen = v.loopEnd - v.loopStart;
             if (idx >= (int)v.loopEnd) {
                 double offsetInLoop = std::fmod(absPos - v.loopStart, (double)loopLen);
