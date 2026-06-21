@@ -1488,9 +1488,35 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
             int blockEnd = std::min(pos + BS, totalSamples);
             int blockLen = blockEnd - pos;
 
-            // CC適用（このブロックの範囲）
-            int64_t blockTickStart = (int64_t)((double)pos / m_sampleRate * midi.ticksPerQuarterNote() * (midi.initialTempo() / 60.0));
-            int64_t blockTickEnd = (int64_t)((double)blockEnd / m_sampleRate * midi.ticksPerQuarterNote() * (midi.initialTempo() / 60.0));
+            // CC適用（このブロックの範囲）— テンポマップ対応
+            const auto& tmap = midi.tempoMap();
+            int ts = (int)tmap.size();
+            auto tickForTime = [&](double sec) -> int64_t {
+                if (ts == 0) return (int64_t)(sec * midi.ticksPerQuarterNote() * 2.0);
+                double accumSec = 0;
+                int64_t prevTick = 0;
+                for (int i = 0; i < ts; i++) {
+                    double tickSec = midi.tickToSeconds(tmap[i].first);
+                    double intervalSec = tickSec - accumSec;
+                    if (intervalSec > 0 && accumSec + intervalSec > sec) {
+                        double frac = (sec - accumSec) / intervalSec;
+                        return prevTick + (int64_t)(frac * (tmap[i].first - prevTick));
+                    }
+                    accumSec = tickSec;
+                    prevTick = tmap[i].first;
+                }
+                if (ts > 0) {
+                    double lastBPM = tmap[ts - 1].second;
+                    double lastTickSec = midi.tickToSeconds(tmap[ts - 1].first);
+                    double excessSec = sec - lastTickSec;
+                    return tmap[ts - 1].first + (int64_t)(excessSec * midi.ticksPerQuarterNote() * lastBPM / 60.0);
+                }
+                return (int64_t)(sec * midi.ticksPerQuarterNote() * 2.0);
+            };
+            double blockSecStart = (double)pos / m_sampleRate;
+            double blockSecEnd = (double)blockEnd / m_sampleRate;
+            int64_t blockTickStart = tickForTime(blockSecStart);
+            int64_t blockTickEnd = tickForTime(blockSecEnd);
             // CC7 (Volume)
             for (auto& [t, v] : expr.volume[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 7, v);
             // CC11 (Expression)
