@@ -125,6 +125,7 @@ private:
         bool loop = false;
         int loopMode = 0; // 0=no loop, 1=continuous, 3=loop until release
         uint16_t exclusiveClass = 0;
+        int velHint = -1; // sample name extracted velocity threshold (e.g., GPIANO_24 -> 24)
     };
 
     void buildPresetZones(int channel);

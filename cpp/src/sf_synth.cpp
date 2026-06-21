@@ -121,8 +121,16 @@ void SFSynthesizer::buildPresetZones(int channel) {
             const auto& gen = iGens[ig];
             int16_t a = gen.amount;
             switch (gen.oper) {
-                case 5: def.keyLow = a & 0x7F; def.keyHigh = (a >> 8) & 0x7F; break;
-                case 6: def.velLow = a & 0x7F; def.velHigh = (a >> 8) & 0x7F; break;
+                case 5: {
+                    int kl = a & 0x7F; int kh = (a >> 8) & 0x7F;
+                    if (kl <= kh) { def.keyLow = kl; def.keyHigh = kh; } // Skip inverted ranges (global zone artifact)
+                    break;
+                }
+                case 6: {
+                    int vl = a & 0x7F; int vh = (a >> 8) & 0x7F;
+                    if (vl <= vh) { def.velLow = vl; def.velHigh = vh; }
+                    break;
+                }
                 case 10: def.attenuation = a / 10.0; break;
                 case 17: def.pan = a / 1000.0; break;
                 case 24: def.fineTune = a / 100.0; break;
@@ -147,8 +155,8 @@ void SFSynthesizer::buildPresetZones(int channel) {
                 const auto& gen = iGens[ig];
                 int16_t a = gen.amount;
                 switch (gen.oper) {
-                    case 5: z.keyLow = a & 0x7F; z.keyHigh = (a >> 8) & 0x7F; break;
-                    case 6: z.velLow = a & 0x7F; z.velHigh = (a >> 8) & 0x7F; break;
+                    case 5: { int kl = a & 0x7F; int kh = (a >> 8) & 0x7F; if (kl <= kh) { z.keyLow = kl; z.keyHigh = kh; } break; }
+                    case 6: { int vl = a & 0x7F; int vh = (a >> 8) & 0x7F; if (vl <= vh) { z.velLow = vl; z.velHigh = vh; } break; }
                     case 10: z.attenuation = a / 10.0; break;
                     case 17: z.pan = a / 1000.0; break;
                     case 24: z.fineTune = a / 100.0; break;
@@ -218,8 +226,30 @@ void SFSynthesizer::buildPresetZones(int channel) {
             z.loop = ((s.sampleType >> 8) & 0xFF) == 1 || ((s.sampleType >> 8) & 0xFF) == 3; // mode 1 or 3
             z.loopMode = (s.sampleType >> 8) & 0xFF;
 
+            // サンプル名からベロシティ閾値を抽出（例: "GPIANO_24" -> 24, "grand piano 05 R" -> -1）
+            z.velHint = -1;
+            {
+                std::string sname = s.name;
+                // _ の位置を探す
+                size_t underPos = sname.rfind('_');
+                if (underPos != std::string::npos && underPos + 1 < sname.size()) {
+                    // _ の後に数字があるか確認
+                    std::string suffix = sname.substr(underPos + 1);
+                    bool allDigit = !suffix.empty();
+                    for (char c : suffix) if (c < '0' || c > '9') { allDigit = false; break; }
+                    if (allDigit) {
+                        int num = std::stoi(suffix);
+                        if (num >= 0 && num <= 127) z.velHint = num;
+                    }
+                }
+            }
+
             m_channelZones[channel].push_back(z);
             zoneCount++;
+            if (channel == 0 && zoneCount <= 15) {
+                std::cout << "    [ZoneBuild] ch=0 zone#" << zoneCount << " sample[" << z.sampleIndex << "] " << s.name
+                          << " rootKey=" << z.rootKey << " velHint=" << z.velHint << std::endl;
+            }
         }
     }
     if (zoneCount > 0) {
@@ -232,9 +262,17 @@ void SFSynthesizer::buildPresetZones(int channel) {
 bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZone& out) {
     bool isDrum = (m_channels[channel].bank == 128);
     int bestRange = isDrum ? 999 : 0;
-    int bestVelDist = 999;
     int bestRootKeyDist = 999;
     bool found = false;
+
+    // Debug: check first zone velHint
+    if (channel == 0 && note == 60 && velocity == 127 && !m_channelZones[channel].empty()) {
+        const auto& first = m_channelZones[channel][0];
+        std::cout << "    [Resolve-debug] first zone: sample=" << first.sampleIndex
+                  << " velHint=" << first.velHint
+                  << " key=" << first.keyLow << "-" << first.keyHigh
+                  << " vel=" << first.velLow << "-" << first.velHigh << std::endl;
+    }
 
     for (const auto& z : m_channelZones[channel]) {
         if (note < z.keyLow || note > z.keyHigh) continue;
@@ -247,12 +285,35 @@ bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZon
                 found = true;
             }
         } else {
-            int velDist = std::abs(velocity - (z.velLow + z.velHigh) / 2);
             int rootKeyDist = std::abs(note - (int)z.rootKey);
-            if (rootKeyDist < bestRootKeyDist ||
-                (rootKeyDist == bestRootKeyDist && velDist < bestVelDist)) {
+            bool better = false;
+            if (rootKeyDist < bestRootKeyDist) {
+                better = true;
+            } else if (rootKeyDist == bestRootKeyDist) {
+                // 同じrootKey距離の場合、velHintでベロシティ層を選択
+                // SF2準拠: velHint <= velocity の最大hintを持つゾーンを選択
+                if (z.velHint >= 0 || out.velHint >= 0) {
+                    bool zBelow = (z.velHint >= 0 && z.velHint <= velocity);
+                    bool outBelow = (out.velHint >= 0 && out.velHint <= velocity);
+                    if (zBelow && !outBelow) {
+                        better = true;
+                    } else if (zBelow && outBelow) {
+                        // 両方velocity以下 → hintが大きい方を優先
+                        better = (z.velHint > out.velHint);
+                    } else if (!zBelow && !outBelow && z.velHint >= 0 && out.velHint >= 0) {
+                        // 両方velocity超 → hintが小さい方を優先
+                        better = (z.velHint < out.velHint);
+                    } else if (z.velHint >= 0 && out.velHint < 0) {
+                        better = true;
+                    }
+                } else {
+                    int velDist = std::abs(velocity - (z.velLow + z.velHigh) / 2);
+                    int bestVelDistCur = std::abs(velocity - (out.velLow + out.velHigh) / 2);
+                    better = (velDist < bestVelDistCur);
+                }
+            }
+            if (better) {
                 bestRootKeyDist = rootKeyDist;
-                bestVelDist = velDist;
                 out = z;
                 found = true;
             }
@@ -262,8 +323,20 @@ bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZon
     if (found && m_channels[channel].program == 0 && note == 60) {
         std::cout << "    [Resolve] ch=" << channel << " note=" << note << " vel=" << velocity
                   << " -> sample[" << out.sampleIndex << "] rootKey=" << out.rootKey
+                  << " velHint=" << out.velHint
                   << " key=" << out.keyLow << "-" << out.keyHigh
                   << " vel=" << out.velLow << "-" << out.velHigh << std::endl;
+    }
+    // Debug: print zone count for ch=0 note=60
+    if (m_channels[channel].program == 0 && note == 60 && velocity == 127 && m_channelZones[channel].size() > 0) {
+        int velHintCount = 0;
+        for (const auto& z : m_channelZones[channel]) {
+            if (note >= z.keyLow && note <= z.keyHigh && velocity >= z.velLow && velocity <= z.velHigh) {
+                if (z.velHint >= 0) velHintCount++;
+            }
+        }
+        std::cout << "    [Zones] ch=" << channel << " total=" << m_channelZones[channel].size()
+                  << " matching=" << velHintCount << " with velHint" << std::endl;
     }
     return found;
 }
