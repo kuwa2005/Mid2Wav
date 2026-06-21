@@ -965,6 +965,8 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             m_channels[ch].bank = 128;
         }
 
+        // bankLSBを先に復元してからprogramChange（14bit bank解決が初回から有効に）
+        m_channels[ch].bankLSB = expr.getValueAtTick(expr.bankSelectLSB[ch], firstNoteTick, 0);
         programChange(ch, m_channels[ch].program, m_channels[ch].bank);
 
         // 全CCを初期状態に復元
@@ -982,7 +984,6 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         m_channels[ch].portamentoOn = expr.getValueAtTick(expr.portamentoOn[ch], firstNoteTick, 0);
         m_channels[ch].breath = expr.getValueAtTick(expr.breath[ch], firstNoteTick, 0);
         m_channels[ch].foot = expr.getValueAtTick(expr.foot[ch], firstNoteTick, 0);
-        m_channels[ch].bankLSB = expr.getValueAtTick(expr.bankSelectLSB[ch], firstNoteTick, 0);
     }
     std::cout << "  [Debug] Channel init done" << std::endl;
 
@@ -1091,6 +1092,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             for (auto& [t, v] : expr.sysPartMode[ch]) {
                 if (t >= blockTickStart && t < blockTickEnd) {
                     if (v == 1) {
+                        // SysEx Part Mode: リズム指定 → bank=128（GS仕様準拠）
                         m_channels[ch].bank = 128;
                         programChange(ch, m_channels[ch].program, m_channels[ch].bank);
                         channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
@@ -1154,7 +1156,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         // Note On/Off を正確なサンプル位置で処理
         // ブロック内の全ノート・CCイベントを集めてソート
         struct BlockEvent { int sampleOffset; int channel; int type; int p1; int p2; };
-        // type: 0=noteOn, 1=noteOff, 2=CC, 3=pitchBend, 4=programChange
+        // type: 0=noteOff, 1=CC, 2=pitchBend, 3=noteOn
         std::vector<BlockEvent> events;
 
         // Note events
@@ -1170,7 +1172,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 int sampleOffset = noteStart - pos;
                 if (sampleOffset < 0) sampleOffset = 0;
                 if (sampleOffset >= blockLen) sampleOffset = blockLen - 1;
-                events.push_back({sampleOffset, n.channel, 0, shiftedNote, n.velocity});
+                events.push_back({sampleOffset, n.channel, 3, shiftedNote, n.velocity});
                 active.push_back({&n, false});
             }
         }
@@ -1180,7 +1182,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             int noteEnd = (int)(midi.tickToSeconds(a.note->endTime, a.note->track) * m_sampleRate);
             if (noteEnd >= pos && noteEnd < blockEnd) {
                 int shiftedNote = std::clamp(a.note->note + opts.pitchShift, 0, 127);
-                events.push_back({noteEnd - pos, a.note->channel, 1, shiftedNote, 0});
+                events.push_back({noteEnd - pos, a.note->channel, 0, shiftedNote, 0});
                 a.offDone = true;
             }
         }
@@ -1192,11 +1194,10 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             auto addCC = [&](const std::vector<std::pair<int64_t, int>>& ccVec, int ccNum) {
                 for (auto& [t, v] : ccVec) {
                     if (t >= blockTickStart && t < blockTickEnd) {
-                        int64_t sec128 = (int64_t)(t * 1000000.0 / (midi.ticksPerQuarterNote() * midi.initialTempo() / 60.0));
                         int sampleOffset = (int)(midi.tickToSeconds(t, 0) * m_sampleRate) - pos;
                         if (sampleOffset < 0) sampleOffset = 0;
                         if (sampleOffset >= blockLen) sampleOffset = blockLen - 1;
-                        events.push_back({sampleOffset, ch, 2, ccNum, v});
+                        events.push_back({sampleOffset, ch, 1, ccNum, v});
                     }
                 }
             };
@@ -1215,7 +1216,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                     int sampleOffset = (int)(midi.tickToSeconds(t, 0) * m_sampleRate) - pos;
                     if (sampleOffset < 0) sampleOffset = 0;
                     if (sampleOffset >= blockLen) sampleOffset = blockLen - 1;
-                    events.push_back({sampleOffset, ch, 3, v, 0});
+                    events.push_back({sampleOffset, ch, 2, v, 0});
                 }
             }
         }
@@ -1252,10 +1253,10 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             while (evIdx < (int)events.size() && events[evIdx].sampleOffset == segEnd) {
                 auto& ev = events[evIdx];
                 switch (ev.type) {
-                    case 0: noteOn(ev.channel, ev.p1, ev.p2); break; // noteOn
-                    case 1: noteOff(ev.channel, ev.p1); break; // noteOff
-                    case 2: controlChange(ev.channel, ev.p1, ev.p2); break; // CC
-                    case 3: pitchBend(ev.channel, ev.p1); break; // pitchBend
+                    case 0: noteOff(ev.channel, ev.p1); break; // noteOff
+                    case 1: controlChange(ev.channel, ev.p1, ev.p2); break; // CC
+                    case 2: pitchBend(ev.channel, ev.p1); break; // pitchBend
+                    case 3: noteOn(ev.channel, ev.p1, ev.p2); break; // noteOn
                 }
                 evIdx++;
             }
@@ -1290,25 +1291,6 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         for (auto& [t, v] : expr.sysDelayFeed) {
             if (t >= blockTickStart && t < blockTickEnd) {
                 m_delayFeedback = v / 127.0f;
-            }
-        }
-
-        // CC91/93/94 の適用
-        for (int ch = 0; ch < 16; ch++) {
-            for (auto& [t, v] : expr.reverbDepth[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) {
-                    controlChange(ch, 91, v);
-                }
-            }
-            for (auto& [t, v] : expr.chorusDepth[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) {
-                    controlChange(ch, 93, v);
-                }
-            }
-            for (auto& [t, v] : expr.delayDepth[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) {
-                    controlChange(ch, 94, v);
-                }
             }
         }
 
@@ -1487,6 +1469,9 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         SFSynthesizer chSynth;
         chSynth.init(*m_sf2, m_sampleRate);
 
+        // bankLSBを先に復元してからprogramChange（14bit bank解決が初回から有効に）
+        chSynth.m_channels[0].bankLSB = expr.getValueAtTick(expr.bankSelectLSB[ch], firstNoteTick, 0);
+
         // program変更を適用
         chSynth.programChange(0, chProgram, chBank);
 
@@ -1503,7 +1488,6 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         chSynth.m_channels[0].delay = expr.getValueAtTick(expr.delayDepth[ch], firstNoteTick, 0);
         chSynth.m_channels[0].breath = expr.getValueAtTick(expr.breath[ch], firstNoteTick, 0);
         chSynth.m_channels[0].foot = expr.getValueAtTick(expr.foot[ch], firstNoteTick, 0);
-        chSynth.m_channels[0].bankLSB = expr.getValueAtTick(expr.bankSelectLSB[ch], firstNoteTick, 0);
 
         std::cout << "    Ch " << (ch + 1) << ": program=" << chProgram
                   << " bank=" << chBank
