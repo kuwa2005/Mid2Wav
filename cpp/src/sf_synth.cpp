@@ -233,6 +233,7 @@ bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZon
     bool isDrum = (m_channels[channel].bank == 128);
     int bestRange = isDrum ? 999 : 0;
     int bestVelDist = 999;
+    int bestRootKeyDist = 999;
     bool found = false;
 
     for (const auto& z : m_channelZones[channel]) {
@@ -246,9 +247,11 @@ bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZon
                 found = true;
             }
         } else {
-            int velCenter = (z.velLow + z.velHigh) / 2;
-            int velDist = std::abs(velocity - velCenter);
-            if (velDist < bestVelDist) {
+            int velDist = std::abs(velocity - (z.velLow + z.velHigh) / 2);
+            int rootKeyDist = std::abs(note - (int)z.rootKey);
+            if (rootKeyDist < bestRootKeyDist ||
+                (rootKeyDist == bestRootKeyDist && velDist < bestVelDist)) {
+                bestRootKeyDist = rootKeyDist;
                 bestVelDist = velDist;
                 out = z;
                 found = true;
