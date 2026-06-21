@@ -121,16 +121,8 @@ void SFSynthesizer::buildPresetZones(int channel) {
             const auto& gen = iGens[ig];
             int16_t a = gen.amount;
             switch (gen.oper) {
-                case 5: {
-                    int kl = a & 0x7F; int kh = (a >> 8) & 0x7F;
-                    if (kl <= kh) { def.keyLow = kl; def.keyHigh = kh; }
-                    break;
-                }
-                case 6: {
-                    int vl = a & 0x7F; int vh = (a >> 8) & 0x7F;
-                    if (vl <= vh) { def.velLow = vl; def.velHigh = vh; }
-                    break;
-                }
+                case 5: def.keyLow = a & 0x7F; def.keyHigh = (a >> 8) & 0x7F; break;
+                case 6: def.velLow = a & 0x7F; def.velHigh = (a >> 8) & 0x7F; break;
                 case 10: def.attenuation = a / 10.0; break;
                 case 17: def.pan = a / 1000.0; break;
                 case 24: def.fineTune = a / 100.0; break;
@@ -226,21 +218,6 @@ void SFSynthesizer::buildPresetZones(int channel) {
             z.loop = ((s.sampleType >> 8) & 0xFF) == 1 || ((s.sampleType >> 8) & 0xFF) == 3; // mode 1 or 3
             z.loopMode = (s.sampleType >> 8) & 0xFF;
 
-            z.velHint = -1;
-            {
-                std::string sname = s.name;
-                size_t underPos = sname.rfind('_');
-                if (underPos != std::string::npos && underPos + 1 < sname.size()) {
-                    std::string suffix = sname.substr(underPos + 1);
-                    bool allDigit = !suffix.empty();
-                    for (char c : suffix) if (c < '0' || c > '9') { allDigit = false; break; }
-                    if (allDigit) {
-                        int num = std::stoi(suffix);
-                        if (num >= 0 && num <= 127) z.velHint = num;
-                    }
-                }
-            }
-
             m_channelZones[channel].push_back(z);
             zoneCount++;
         }
@@ -270,27 +247,12 @@ bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZon
                 found = true;
             }
         } else {
+            int velDist = std::abs(velocity - (z.velLow + z.velHigh) / 2);
             int rootKeyDist = std::abs(note - (int)z.rootKey);
-            bool better = false;
-            if (rootKeyDist < bestRootKeyDist) {
-                better = true;
-            } else if (rootKeyDist == bestRootKeyDist) {
-                if (z.velHint >= 0 && out.velHint >= 0) {
-                    bool zBelow = (z.velHint <= velocity);
-                    bool outBelow = (out.velHint <= velocity);
-                    if (zBelow && !outBelow) better = true;
-                    else if (zBelow && outBelow) better = (z.velHint > out.velHint);
-                    else if (!zBelow && !outBelow) better = (z.velHint < out.velHint);
-                } else if (z.velHint >= 0 && out.velHint < 0) {
-                    better = true;
-                } else {
-                    int velDist = std::abs(velocity - (z.velLow + z.velHigh) / 2);
-                    int bestVelDistCur = std::abs(velocity - (out.velLow + out.velHigh) / 2);
-                    better = (velDist < bestVelDistCur);
-                }
-            }
-            if (better) {
+            if (rootKeyDist < bestRootKeyDist ||
+                (rootKeyDist == bestRootKeyDist && velDist < bestVelDist)) {
                 bestRootKeyDist = rootKeyDist;
+                bestVelDist = velDist;
                 out = z;
                 found = true;
             }
