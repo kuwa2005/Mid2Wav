@@ -60,8 +60,8 @@ void SFSynthesizer::buildPresetZones(int channel) {
     if (!m_sf2) return;
 
     const auto& ch = m_channels[channel];
-    // 14bit bank: (MSB << 7) | LSB — SF2 preset bank matching
-    int fullBank = ((ch.bank & 0x7F) << 7) | (ch.bankLSB & 0x7F);
+    // 14bit bank: MSB>=128 なら直接値、それ以外は (MSB << 7) | LSB
+    int fullBank = (ch.bank >= 128) ? ch.bank : ((ch.bank & 0x7F) << 7) | (ch.bankLSB & 0x7F);
     int pIdx = m_sf2->findPreset(fullBank, ch.program);
     if (pIdx < 0) pIdx = m_sf2->findPreset(ch.bank, ch.program); // fallback: MSB only
     if (pIdx < 0) pIdx = m_sf2->findPreset(0, ch.program); // fallback: bank 0
@@ -522,12 +522,14 @@ void SFSynthesizer::programChange(int channel, int program, int bank) {
     m_channels[channel].program = program;
     m_channels[channel].bank = bank;
     if (!m_fallbackMode && m_sf2) {
-        int pIdx = m_sf2->findPreset(bank, program);
+        int fullBank = (bank >= 128) ? bank : ((bank & 0x7F) << 7) | (m_channels[channel].bankLSB & 0x7F);
+        int pIdx = m_sf2->findPreset(fullBank, program);
+        if (pIdx < 0) pIdx = m_sf2->findPreset(bank, program);
         if (pIdx >= 0) {
-            std::cout << "    [Preset] ch=" << channel << " bank=" << bank << " prog=" << program 
+            std::cout << "    [Preset] ch=" << channel << " bank=" << bank << " LSB=" << m_channels[channel].bankLSB << " prog=" << program 
                       << " -> preset[" << pIdx << "] \"" << m_sf2->presets()[pIdx].name << "\"" << std::endl;
         } else {
-            std::cout << "    [Preset] ch=" << channel << " bank=" << bank << " prog=" << program 
+            std::cout << "    [Preset] ch=" << channel << " bank=" << bank << " LSB=" << m_channels[channel].bankLSB << " prog=" << program 
                       << " -> NOT FOUND" << std::endl;
         }
         buildPresetZones(channel);
@@ -960,10 +962,10 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         // GS Part Mode SysEx: Ch10はデフォルトでリズム(bank=128)
         // Ch1-9/11-16: partMode==1でもMIDIファイルのCC0 MSBを優先
         if (ch == 9 && partMode != 0) {
-            m_channels[ch].bank = 128;
+            m_channels[ch].bank = 128; // GM drum default
         } else if (ch != 9 && partMode == 1 && initBank == 0) {
             // SysExがリズム指定 but bank selectなし → bank=128
-            m_channels[ch].bank = 128;
+            m_channels[ch].bank = 128; // GM drum default
         }
 
         // bankLSBを先に復元してからprogramChange（14bit bank解決が初回から有効に）
@@ -1086,7 +1088,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 if (latestPartMode == 0) {
                     // SysExで明示的にメロディ指定 → bank Selectの値を信頼
                 } else {
-                    m_channels[ch].bank = 128;
+                    m_channels[ch].bank = 128; // GM drum default
                 }
             }
             // GS Part Mode SysEx: 全チャンネル対象（Ch10以外もリズム/メロディ切替可）
@@ -1094,7 +1096,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 if (t >= blockTickStart && t < blockTickEnd) {
                     if (v == 1) {
                         // SysEx Part Mode: リズム指定 → bank=128（GS仕様準拠）
-                        m_channels[ch].bank = 128;
+                        m_channels[ch].bank = 128; // GM drum default
                         programChange(ch, m_channels[ch].program, m_channels[ch].bank);
                         channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
                     } else if (v == 0 && ch == 9) {
