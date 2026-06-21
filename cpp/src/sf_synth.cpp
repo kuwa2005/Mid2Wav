@@ -1387,6 +1387,28 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
             int blockEnd = std::min(pos + BS, totalSamples);
             int blockLen = blockEnd - pos;
 
+            // CC適用（このブロックの範囲）
+            int64_t blockTickStart = (int64_t)((double)pos / m_sampleRate * midi.ticksPerQuarterNote() * (midi.initialTempo() / 60.0));
+            int64_t blockTickEnd = (int64_t)((double)blockEnd / m_sampleRate * midi.ticksPerQuarterNote() * (midi.initialTempo() / 60.0));
+            // CC7 (Volume)
+            for (auto& [t, v] : expr.volume[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 7, v);
+            // CC11 (Expression)
+            for (auto& [t, v] : expr.expression[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 11, v);
+            // CC2 (Breath)
+            for (auto& [t, v] : expr.breath[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 2, v);
+            // CC64 (Sustain)
+            for (auto& [t, v] : expr.sustain[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 64, v);
+            // CC1 (Modulation)
+            for (auto& [t, v] : expr.modulation[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 1, v);
+            // Pitch Bend
+            for (auto& [t, v] : expr.pitchBend[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.pitchBend(0, v);
+            // CC10 (Pan)
+            for (auto& [t, v] : expr.pan[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 10, v);
+            // CC91/93/94 (Effects)
+            for (auto& [t, v] : expr.reverbDepth[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 91, v);
+            for (auto& [t, v] : expr.chorusDepth[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 93, v);
+            for (auto& [t, v] : expr.delayDepth[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 94, v);
+
             for (auto& n : mapped) {
                 int noteStart = (int)(midi.tickToSeconds(n.startTime, n.track) * m_sampleRate);
                 if (noteStart >= pos && noteStart < blockEnd) {
