@@ -918,12 +918,21 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             if (t <= firstNoteTick) initBank = v;
         }
 
-        // MIDIファイルのprogram/bankをそのまま信頼
+        // GM規約: Ch10 (0-indexed 9) はデフォルトでドラム(bank=128)
+        // GS Part Mode SysExで明示的にmelody(0x00)とされた場合のみ bank=0
+        int partMode = expr.getValueAtTick(expr.sysPartMode[ch], firstNoteTick, -1);
+        if (ch == 9) {
+            if (partMode == 0) {
+                // SysExで明示的にメロディ指定
+            } else {
+                initBank = 128;
+            }
+        }
+
         m_channels[ch].program = initProgram;
         m_channels[ch].bank = initBank;
 
-        // GS Part Mode SysEx: 0x01=リズム → bank=128に強制
-        int partMode = expr.getValueAtTick(expr.sysPartMode[ch], firstNoteTick, 0);
+        // GS Part Mode SysEx: 0x01=リズム → bank=128に強制（全チャンネル）
         if (partMode == 1) {
             m_channels[ch].bank = 128;
         }
@@ -1038,26 +1047,38 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                     needProgramChange = true;
                 }
             }
+            // GM規約: Ch10 はデフォルトでドラム。GS Part Mode SysExでmelody(0x00)に変更された場合のみ bank=0
+            if (ch == 9) {
+                int latestPartMode = -1;
+                for (auto& [t, v] : expr.sysPartMode[ch]) {
+                    if (t <= blockTickEnd) latestPartMode = v;
+                }
+                if (latestPartMode == 0) {
+                    // SysExで明示的にメロディ指定 → bank Selectの値を信頼
+                } else {
+                    m_channels[ch].bank = 128;
+                }
+            }
+            // GS Part Mode SysEx: 全チャンネル対象（Ch10以外もリズム/メロディ切替可）
+            for (auto& [t, v] : expr.sysPartMode[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) {
+                    if (v == 1) {
+                        m_channels[ch].bank = 128;
+                        programChange(ch, m_channels[ch].program, m_channels[ch].bank);
+                        channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
+                    } else if (v == 0 && ch != 9) {
+                        m_channels[ch].bank = 0;
+                        programChange(ch, m_channels[ch].program, m_channels[ch].bank);
+                        channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
+                    }
+                }
+            }
             if (needProgramChange) {
                 programChange(ch, newProgram, m_channels[ch].bank);
                 channelPresetKey[ch] = newProgram * 256 + m_channels[ch].bank;
             } else if (hasBankSelectInBlock) {
                 programChange(ch, m_channels[ch].program, m_channels[ch].bank);
                 channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
-            }
-            // GS Part Mode SysEx: ブロック内でリズムに変更された場合 bank=128
-            for (auto& [t, v] : expr.sysPartMode[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) {
-                    if (v == 1 && m_channels[ch].bank != 128) {
-                        m_channels[ch].bank = 128;
-                        programChange(ch, m_channels[ch].program, m_channels[ch].bank);
-                        channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
-                    } else if (v == 0 && m_channels[ch].bank == 128) {
-                        m_channels[ch].bank = 0;
-                        programChange(ch, m_channels[ch].program, m_channels[ch].bank);
-                        channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
-                    }
-                }
             }
             // Volume
             for (auto& [t, v] : expr.volume[ch]) {
@@ -1391,6 +1412,10 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         for (auto& n : notes) if (n.channel == ch && n.startTime < firstNoteTick) firstNoteTick = n.startTime;
         for (auto& [t, v] : expr.programChange[ch]) if (t <= firstNoteTick) chProgram = v;
         for (auto& [t, v] : expr.bankSelectMSB[ch]) if (t <= firstNoteTick) chBank = v;
+
+        // GM規約: Ch10 (0-indexed 9) はデフォルトでドラム(bank=128)
+        int partMode = expr.getValueAtTick(expr.sysPartMode[ch], firstNoteTick, -1);
+        if (ch == 9 && partMode != 0) chBank = 128;
 
         // このチャンネルのノートのみを抽出
         std::vector<MidiNote> chNotes;
