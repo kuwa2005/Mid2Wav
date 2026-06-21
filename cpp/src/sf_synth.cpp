@@ -390,6 +390,9 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
                 v.filterQ = std::max(0.5, zone.filterQ);
                 std::fill(v.filterState, v.filterState + 4, 0.0);
                 v.vibratoDepth = m_channels[channel].modulation / 127.0 * 2.0;
+                v.basePitchRatio = v.pitchRatio;
+                v.rootKey = zone.rootKey;
+                v.portamentoProgress = 1.0;
                 return;
             }
         }
@@ -487,7 +490,7 @@ void SFSynthesizer::controlChange(int channel, int cc, int value) {
         case 7: ch.volume = value; break;
         case 10: ch.pan = value; break;
         case 11: ch.expression = value; break;
-        case 32: break; // Bank Select LSB
+        case 38: ch.rpnValue = (value & 0x7F) | ((ch.rpnValue & 0x7F00)); break; // Data Entry LSB // Bank Select LSB
         case 64: {
             int prevSustain = ch.sustain;
             ch.sustain = value;
@@ -512,22 +515,21 @@ void SFSynthesizer::controlChange(int channel, int cc, int value) {
         case 100: ch.rpnLSB = value; break; // RPN LSB
         case 101: ch.rpnMSB = value; break; // RPN MSB
         case 106: {
-            ch.rpnValue = value; // Data Entry MSB
+            ch.rpnValue = (ch.rpnValue & 0x7F) | ((value & 0x7F) << 7); // Data Entry MSB (14bit)
             // RPN処理
             if (ch.rpnMSB == 0 && ch.rpnLSB == 0) {
                 // RPN 0: Pitch Bend Sensitivity (0-24半音)
                 ch.pitchBendRange = std::clamp(value, 0, 24);
             } else if (ch.rpnMSB == 0 && ch.rpnLSB == 1) {
-                // RPN 1: Channel Fine Tuning (0-16383, 中心=8192=0 cents)
-                // ピッチベンドに反映: fineTuning = (value - 8192) / 8192 * 100 cents
-                ch.fineTune = (value - 64) * 100.0 / 64.0; // ±100 cents
+                // RPN 1: Channel Fine Tuning (14bit, 中心=8192=0 cents, ±100 cents)
+                int val14 = ch.rpnValue; // 14bit (CC6 MSB + CC38 LSB)
+                ch.fineTune = (val14 - 8192) * 100.0 / 8192.0;
             } else if (ch.rpnMSB == 0 && ch.rpnLSB == 2) {
                 // RPN 2: Channel Coarse Tuning (0-127, 中心=64=0半音)
-                ch.coarseTune = value - 64; // ±64半音
+                ch.coarseTune = value - 64;
             }
             break;
         }
-        case 38: break; // Data Entry LSB
         case 96: break; // Data Increment
         case 97: break; // Data Decrement
         case 120: // All Sound Off
@@ -602,7 +604,7 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
 
     // Live pan update
     double chPan = (m_channels[v.channel].pan - 64) / 64.0;
-    v.pan = std::clamp(v.pan * 0.99 + chPan * 0.01, -1.0, 1.0); // smooth transition
+    v.pan = chPan; // ライブ更新（遅延なし）
 
     // Update LFO phase for this voice
     double lfoValue = 0.0;
@@ -870,6 +872,20 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         m_channels[ch].program = initProgram;
         m_channels[ch].bank = initBank;
         programChange(ch, m_channels[ch].program, m_channels[ch].bank);
+
+        // 全CCを初期状態に復元
+        m_channels[ch].volume = expr.getValueAtTick(expr.volume[ch], firstNoteTick, 100);
+        m_channels[ch].expression = expr.getValueAtTick(expr.expression[ch], firstNoteTick, 127);
+        m_channels[ch].pan = expr.getValueAtTick(expr.pan[ch], firstNoteTick, 64);
+        m_channels[ch].sustain = expr.getValueAtTick(expr.sustain[ch], firstNoteTick, 0);
+        m_channels[ch].modulation = expr.getValueAtTick(expr.modulation[ch], firstNoteTick, 0);
+        m_channels[ch].pitchBend = expr.getValueAtTick(expr.pitchBend[ch], firstNoteTick, 8192);
+        m_channels[ch].pitchBendRange = expr.getValueAtTick(expr.pitchBendRange[ch], firstNoteTick, 2);
+        m_channels[ch].reverb = expr.getValueAtTick(expr.sysReverbLevel, firstNoteTick, 0);
+        m_channels[ch].chorus = expr.getValueAtTick(expr.sysChorusLevel, firstNoteTick, 0);
+        m_channels[ch].delay = expr.getValueAtTick(expr.sysDelayLevel, firstNoteTick, 0);
+        m_channels[ch].portamentoTime = expr.getValueAtTick(expr.portamentoTime[ch], firstNoteTick, 0);
+        m_channels[ch].portamentoOn = expr.getValueAtTick(expr.portamentoOn[ch], firstNoteTick, 0);
     }
 
     // チャンネル情報表示
@@ -1028,7 +1044,8 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             if (a.offDone) continue;
             int noteEnd = (int)(midi.tickToSeconds(a.note->endTime, a.note->track) * m_sampleRate);
             if (noteEnd <= pos) {
-                noteOff(a.note->channel, a.note->note);
+                int shiftedNote = std::clamp(a.note->note + opts.pitchShift, 0, 127);
+                noteOff(a.note->channel, shiftedNote);
                 a.offDone = true;
             }
         }
@@ -1066,6 +1083,25 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         for (auto& [t, v] : expr.sysDelayFeed) {
             if (t >= blockTickStart && t < blockTickEnd) {
                 m_delayFeedback = v / 127.0f;
+            }
+        }
+
+        // CC91/93/94 の適用
+        for (int ch = 0; ch < 16; ch++) {
+            for (auto& [t, v] : expr.reverbDepth[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) {
+                    controlChange(ch, 91, v);
+                }
+            }
+            for (auto& [t, v] : expr.chorusDepth[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) {
+                    controlChange(ch, 93, v);
+                }
+            }
+            for (auto& [t, v] : expr.delayDepth[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) {
+                    controlChange(ch, 94, v);
+                }
             }
         }
 
@@ -1112,17 +1148,19 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
     auto t1 = std::chrono::steady_clock::now();
     std::cout << "  [Render] Done (" << std::chrono::duration<double>(t1 - t0).count() << " sec)" << std::endl;
 
-    // Normalize to peak
-    float peak = 1e-6f;
-    for (size_t i = 0; i < left.size(); i++) {
-        float lv = std::isfinite(left[i]) ? std::abs(left[i]) : 0.0f;
-        float rv = std::isfinite(right[i]) ? std::abs(right[i]) : 0.0f;
-        peak = std::max(peak, std::max(lv, rv));
-    }
-    float gain = (peak > 1e-6f) ? (0.95f / peak) : 1.0f;
-    for (size_t i = 0; i < left.size(); i++) {
-        left[i] = std::isfinite(left[i]) ? left[i] * gain : 0.0f;
-        right[i] = std::isfinite(right[i]) ? right[i] * gain : 0.0f;
+    // Normalize to peak (skip if --no-normalize)
+    if (!opts.noNormalize) {
+        float peak = 1e-6f;
+        for (size_t i = 0; i < left.size(); i++) {
+            float lv = std::isfinite(left[i]) ? std::abs(left[i]) : 0.0f;
+            float rv = std::isfinite(right[i]) ? std::abs(right[i]) : 0.0f;
+            peak = std::max(peak, std::max(lv, rv));
+        }
+        float gain = (peak > 1e-6f) ? (0.95f / peak) : 1.0f;
+        for (size_t i = 0; i < left.size(); i++) {
+            left[i] = std::isfinite(left[i]) ? left[i] * gain : 0.0f;
+            right[i] = std::isfinite(right[i]) ? right[i] * gain : 0.0f;
+        }
     }
 
     WavWriter::write(wavPath, left, right, m_sampleRate);
@@ -1251,7 +1289,8 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
             for (auto& n : mapped) {
                 int noteEnd = (int)(midi.tickToSeconds(n.endTime, n.track) * m_sampleRate);
                 if (noteEnd >= pos && noteEnd < blockEnd) {
-                    chSynth.noteOff(n.channel, n.note);
+                    int shiftedNote = std::clamp(n.note + pitchShift, 0, 127);
+                    chSynth.noteOff(n.channel, shiftedNote);
                 }
             }
 

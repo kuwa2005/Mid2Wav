@@ -46,6 +46,12 @@ struct MidiExpression {
     std::vector<std::pair<int64_t, int>> programChange[16];
     // バンクセレクトMSB (CC0): (tick, value)
     std::vector<std::pair<int64_t, int>> bankSelectMSB[16];
+    // リバーブ深さ (CC91): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> reverbDepth[16];
+    // コーラス深さ (CC93): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> chorusDepth[16];
+    // ディレイ深さ (CC94): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> delayDepth[16];
     // GS SysEx: リバーブパラメータ
     std::vector<std::pair<int64_t, int>> sysReverbType;      // (tick, type 0-5)
     std::vector<std::pair<int64_t, int>> sysReverbLevel;     // (tick, level 0-127)
@@ -78,6 +84,9 @@ struct MidiExpression {
     void addSustain(int ch, int64_t tick, int value) { sustain[ch].push_back({tick, value}); }
     void addProgramChange(int ch, int64_t tick, int value) { programChange[ch].push_back({tick, value}); }
     void addBankSelectMSB(int ch, int64_t tick, int value) { bankSelectMSB[ch].push_back({tick, value}); }
+    void addReverbDepth(int ch, int64_t tick, int value) { reverbDepth[ch].push_back({tick, value}); }
+    void addChorusDepth(int ch, int64_t tick, int value) { chorusDepth[ch].push_back({tick, value}); }
+    void addDelayDepth(int ch, int64_t tick, int value) { delayDepth[ch].push_back({tick, value}); }
 
     void sort() {
         for (int ch = 0; ch < 16; ch++) {
@@ -93,6 +102,9 @@ struct MidiExpression {
             std::sort(sustain[ch].begin(), sustain[ch].end(), cmp);
             std::sort(programChange[ch].begin(), programChange[ch].end(), cmp);
             std::sort(bankSelectMSB[ch].begin(), bankSelectMSB[ch].end(), cmp);
+            std::sort(reverbDepth[ch].begin(), reverbDepth[ch].end(), cmp);
+            std::sort(chorusDepth[ch].begin(), chorusDepth[ch].end(), cmp);
+            std::sort(delayDepth[ch].begin(), delayDepth[ch].end(), cmp);
         }
         // GS SysEx sort
         auto cmp2 = [](auto& a, auto& b) { return a.first < b.first; };

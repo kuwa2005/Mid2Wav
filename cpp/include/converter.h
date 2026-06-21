@@ -16,6 +16,7 @@ struct ConvertOptions {
     bool deviceAuto = true;
     int pitchShift = 0;
     bool csvLog = false;
+    bool noNormalize = false;
 };
 
 struct BatchLogEntry {

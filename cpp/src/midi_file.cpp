@@ -182,6 +182,9 @@ void MidiFile::extractNotes() {
                     case 32: break;
                     case 64: m_expression.addSustain(channel, currentTick, val); break;
                     case 65: m_expression.addPortamentoOn(channel, currentTick, val); break;
+                    case 91: m_expression.addReverbDepth(channel, currentTick, val); break;
+                    case 93: m_expression.addChorusDepth(channel, currentTick, val); break;
+                    case 94: m_expression.addDelayDepth(channel, currentTick, val); break;
                     default: break;
                 }
             } else if (msgType == 0xE0) {
@@ -208,6 +211,7 @@ void MidiFile::extractNotes() {
                 size_t sysexStart = pos;
                 while (pos < trackData.size() && trackData[pos] != 0xF7) pos++;
                 if (pos < trackData.size()) pos++; // F7をスキップ
+                runningStatus = 0; // SysEx 後に Running Status をクリア
 
                 size_t sysexLen = pos - sysexStart;
                 if (sysexLen >= 2) {
@@ -304,6 +308,20 @@ void MidiFile::extractNotes() {
                             // MU-128, MU-100, MU-80, MU-50 are detected by XG system
                         }
                     }
+                }
+            }
+        }
+
+        // トラック終端で残存noteOnをフラッシュ
+        for (int ch = 0; ch < 16; ch++) {
+            for (int note = 0; note < 128; note++) {
+                if (noteOn[ch][note]) {
+                    MidiNote n; n.channel = ch; n.note = note;
+                    n.velocity = noteOnVel[ch][note];
+                    n.startTime = noteOnTick[ch][note]; n.endTime = currentTick;
+                    n.track = trackIdx;
+                    m_notes.push_back(n);
+                    noteOn[ch][note] = false;
                 }
             }
         }
