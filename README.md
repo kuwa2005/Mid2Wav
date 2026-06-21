@@ -1,7 +1,7 @@
 # Mid2Wav
 
 MIDIファイルをSoundFontベースで高品質WAVに変換するC++コマンドラインツール。
-SC-8850レベルのGS MIDI演奏再現を目指す。
+GM/GS準拠のMIDI演奏再現を目指す。
 
 ## ビルド
 
@@ -37,7 +37,7 @@ Mid2Wav -i midi_folder/ -o wav_folder/
 | `-i, --input <path>` | 入力MIDIファイルまたはディレクトリ | 必須 |
 | `-o, --output <path>` | 出力WAVディレクトリ | 必須 |
 | `--sf2 <path\|auto>` | SoundFontファイル指定。`auto`でsoundfonts/から自動選択 | auto |
-| `--device <model>` | デバイスエミュレーション（下記参照） | auto（SysExから自動検出） |
+| `--device <model>` | デバイスモデルの指定・表示（合成には非連動） | auto（SysExから自動検出） |
 | `--pitch <semitones>` | 全ノートの音程シフト（半音単位）。+12で+1オクターブ、-12で-1オクターブ | 0 |
 | `--channels` | 各MIDIチャンネルを個別WAVファイルとして出力 | 通常のステレオ合成 |
 | `--no-normalize` | ピーク正規化をスキップ | 正規化ON |
@@ -46,22 +46,13 @@ Mid2Wav -i midi_folder/ -o wav_folder/
 
 ### --device オプション
 
-| カテゴリ | 選択肢 | 説明 |
-|---------|--------|------|
-| 汎用 | `GM` | General MIDI互換 |
-| 汎用 | `GS` | Roland GS互換 |
-| Roland | `SC-55` | Roland SC-55相当 |
-| Roland | `SC-88` | Roland SC-88相当 |
-| Roland | `SC-88VL` | Roland SC-88VL相当 |
-| Roland | `SC-8850` | Roland SC-8850相当 |
-| Yamaha | `XG` | Yamaha XG互換 |
-| Yamaha | `MU-50` | Yamaha MU-50相当 |
-| Yamaha | `MU-80` | Yamaha MU-80相当 |
-| Yamaha | `MU-100` | Yamaha MU-100相当 |
-| Yamaha | `MU-128` | Yamaha MU-128相当 |
-| Yamaha | `MOTIF` | Yamaha MOTIF相当 |
+MIDIファイル内のSysExからデバイスを検出し表示します。合成パイプラインには影響しません。
 
-`auto`（デフォルト）ではMIDIファイル内のSysExメッセージからデバイスを自動検出します。
+| カテゴリ | 選択肢 |
+|---------|--------|
+| 汎用 | `GM`, `GS` |
+| Roland | `SC-55`, `SC-88`, `SC-88VL`, `SC-8850` |
+| Yamaha | `MU-50`, `MU-80`, `MU-100`, `MU-128`, `MOTIF` |
 
 ### --channels オプション
 
@@ -86,7 +77,7 @@ output/test_11_Distortion_Guitar_P030_B128.wav  ← bank指定あり
 | 7 | Volume | ○ |
 | 10 | Pan | ○ |
 | 11 | Expression | ○ |
-| 32 | Bank Select LSB | ○ |
+| 32 | Bank Select LSB (14bit bank解決) | ○ |
 | 38 | Data Entry LSB (RPN) | ○ |
 | 64 | Sustain Pedal | ○ |
 | 65 | Portamento On/Off | ○ |
@@ -104,7 +95,8 @@ output/test_11_Distortion_Guitar_P030_B128.wav  ← bank指定あり
 - Roland GS DT1 SysEx解析（F0 41 10 42 12）
 - リバーブ/コーラス/ディレイのパラメータ設定
 - パート別エフェクト送り量
-- デバイス自動検出（SC-55/SC-88/SC-88VL/SC-8850）
+- GS Part Mode SysEx（リズム/メロディパート切替）
+- デバイス自動検出（SC-55/SC-88/SC-88VL/SC-8850）— 表示のみ
 
 ## SoundFont
 
@@ -118,6 +110,29 @@ output/test_11_Distortion_Guitar_P030_B128.wav  ← bank指定あり
 7. FatBoy
 
 `soundfonts/` ディレクトリにSF2ファイルを配置してください。
+合成品質は使用するSF2に完全依存します。
+
+## 実装状況
+
+### 完全対応
+- CC サンプル精度適用（vol/expr/pan/pb/mod/sus/fx をイベント駆動）
+- 14bit Bank Select（CC0+CC32 → SF2 preset解決）
+- SF2 loop mode 1/3（mode 3: release 後ループ停止）
+- Exclusive class（ドラムのみ: ハイハットチョーク等）
+- Biquad LPF（SF2 gen43 明示時のみ、未指定は bypass）
+- ソースレベルリバーブ（Dattorro FDN）、コーラス、ディレイ
+- GS Part Mode SysEx（リズム/メロディ切替、bank選択に影響）
+- GS エフェクトパラメータ（リバーブ/コーラス/ディレイ設定）
+
+### 部分対応
+- Per-channel 分割出力: CC初期化済みだが、セグメント分割note処理・FX未適用
+- GS Capital/Variation: bank MSB+LSB解決済みだが、SC-8850専用バンクマップなし
+- `--device`: SysEx検出・表示のみ、合成パイプライン非連動
+
+### 未対応
+- SF2 Modulator（ベロシティ/モジュレーションカーブ未反映）
+- アフタータッチ（0xD0 記録のみ）
+- SMPTE division 対応（480 tick 固定）
 
 ## ライセンス
 
