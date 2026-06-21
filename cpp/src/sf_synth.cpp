@@ -1409,6 +1409,7 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
             for (auto& [t, v] : expr.chorusDepth[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 93, v);
             for (auto& [t, v] : expr.delayDepth[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 94, v);
 
+            // noteOn を正確なサンプル位置で処理
             for (auto& n : mapped) {
                 int noteStart = (int)(midi.tickToSeconds(n.startTime, n.track) * m_sampleRate);
                 if (noteStart >= pos && noteStart < blockEnd) {
@@ -1416,7 +1417,7 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
                 }
             }
 
-            // noteOff
+            // noteOff を正確なサンプル位置で処理
             for (auto& n : mapped) {
                 int noteEnd = (int)(midi.tickToSeconds(n.endTime, n.track) * m_sampleRate);
                 if (noteEnd >= pos && noteEnd < blockEnd) {
