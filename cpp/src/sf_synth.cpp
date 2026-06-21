@@ -942,8 +942,12 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         m_channels[ch].program = initProgram;
         m_channels[ch].bank = initBank;
 
-        // GS Part Mode SysEx: 0x01=リズム → bank=128に強制（全チャンネル）
-        if (partMode == 1) {
+        // GS Part Mode SysEx: Ch10はデフォルトでリズム(bank=128)
+        // Ch1-9/11-16: partMode==1でもMIDIファイルのCC0 MSBを優先
+        if (ch == 9 && partMode != 0) {
+            m_channels[ch].bank = 128;
+        } else if (ch != 9 && partMode == 1 && initBank == 0) {
+            // SysExがリズム指定 but bank selectなし → bank=128
             m_channels[ch].bank = 128;
         }
 
@@ -1096,39 +1100,6 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 programChange(ch, m_channels[ch].program, m_channels[ch].bank);
                 channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
             }
-            // Volume
-            for (auto& [t, v] : expr.volume[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 7, v);
-            }
-            // Pan
-            for (auto& [t, v] : expr.pan[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 10, v);
-            }
-            // Expression
-            for (auto& [t, v] : expr.expression[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 11, v);
-            }
-            // Pitch bend
-            for (auto& [t, v] : expr.pitchBend[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) pitchBend(ch, v);
-            }
-            // Pitch bend range
-            for (auto& [t, v] : expr.pitchBendRange[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) m_channels[ch].pitchBendRange = v;
-            }
-            // Sustain
-            for (auto& [t, v] : expr.sustain[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 64, v);
-            }
-            // Modulation (CC1)
-            for (auto& [t, v] : expr.modulation[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 1, v);
-            }
-            // Breath (CC2)
-            for (auto& [t, v] : expr.breath[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 2, v);
-            }
-            // Foot Controller (CC4)
             for (auto& [t, v] : expr.foot[ch]) {
                 if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 4, v);
             }
@@ -1159,10 +1130,12 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         }
 
         // Note On/Off を正確なサンプル位置で処理
-        // ブロック内の全ノートイベントを集めてソート
-        struct NoteEvent { int sampleOffset; int channel; int note; int velocity; bool isNoteOn; };
-        std::vector<NoteEvent> events;
+        // ブロック内の全ノート・CCイベントを集めてソート
+        struct BlockEvent { int sampleOffset; int channel; int type; int p1; int p2; };
+        // type: 0=noteOn, 1=noteOff, 2=CC, 3=pitchBend, 4=programChange
+        std::vector<BlockEvent> events;
 
+        // Note events
         for (auto& n : sorted) {
             int noteStart = (int)(midi.tickToSeconds(n.startTime, n.track) * m_sampleRate);
             if (noteStart >= pos && noteStart < blockEnd) {
@@ -1175,7 +1148,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 int sampleOffset = noteStart - pos;
                 if (sampleOffset < 0) sampleOffset = 0;
                 if (sampleOffset >= blockLen) sampleOffset = blockLen - 1;
-                events.push_back({sampleOffset, n.channel, shiftedNote, n.velocity, true});
+                events.push_back({sampleOffset, n.channel, 0, shiftedNote, n.velocity});
                 active.push_back({&n, false});
             }
         }
@@ -1185,16 +1158,50 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             int noteEnd = (int)(midi.tickToSeconds(a.note->endTime, a.note->track) * m_sampleRate);
             if (noteEnd >= pos && noteEnd < blockEnd) {
                 int shiftedNote = std::clamp(a.note->note + opts.pitchShift, 0, 127);
-                events.push_back({noteEnd - pos, a.note->channel, shiftedNote, 0, false});
+                events.push_back({noteEnd - pos, a.note->channel, 1, shiftedNote, 0});
                 a.offDone = true;
             }
         }
         active.erase(std::remove_if(active.begin(), active.end(),
                                     [](const ActiveNote& a) { return a.offDone; }), active.end());
 
+        // CC events をサンプル精度で追加
+        for (int ch = 0; ch < 16; ch++) {
+            auto addCC = [&](const std::vector<std::pair<int64_t, int>>& ccVec, int ccNum) {
+                for (auto& [t, v] : ccVec) {
+                    if (t >= blockTickStart && t < blockTickEnd) {
+                        int64_t sec128 = (int64_t)(t * 1000000.0 / (midi.ticksPerQuarterNote() * midi.initialTempo() / 60.0));
+                        int sampleOffset = (int)(midi.tickToSeconds(t, 0) * m_sampleRate) - pos;
+                        if (sampleOffset < 0) sampleOffset = 0;
+                        if (sampleOffset >= blockLen) sampleOffset = blockLen - 1;
+                        events.push_back({sampleOffset, ch, 2, ccNum, v});
+                    }
+                }
+            };
+            addCC(expr.volume[ch], 7);
+            addCC(expr.expression[ch], 11);
+            addCC(expr.breath[ch], 2);
+            addCC(expr.modulation[ch], 1);
+            addCC(expr.sustain[ch], 64);
+            addCC(expr.pan[ch], 10);
+            addCC(expr.reverbDepth[ch], 91);
+            addCC(expr.chorusDepth[ch], 93);
+            addCC(expr.delayDepth[ch], 94);
+            // Pitch Bend
+            for (auto& [t, v] : expr.pitchBend[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) {
+                    int sampleOffset = (int)(midi.tickToSeconds(t, 0) * m_sampleRate) - pos;
+                    if (sampleOffset < 0) sampleOffset = 0;
+                    if (sampleOffset >= blockLen) sampleOffset = blockLen - 1;
+                    events.push_back({sampleOffset, ch, 3, v, 0});
+                }
+            }
+        }
+
         // イベントをソート
-        std::sort(events.begin(), events.end(), [](const NoteEvent& a, const NoteEvent& b) {
-            return a.sampleOffset < b.sampleOffset;
+        std::sort(events.begin(), events.end(), [](const BlockEvent& a, const BlockEvent& b) {
+            if (a.sampleOffset != b.sampleOffset) return a.sampleOffset < b.sampleOffset;
+            return a.type < b.type; // noteOff before CC before noteOn
         });
 
         // ブロックをイベントで区切って処理
@@ -1221,10 +1228,12 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
 
             // イベントを適用
             while (evIdx < (int)events.size() && events[evIdx].sampleOffset == segEnd) {
-                if (events[evIdx].isNoteOn) {
-                    noteOn(events[evIdx].channel, events[evIdx].note, events[evIdx].velocity);
-                } else {
-                    noteOff(events[evIdx].channel, events[evIdx].note);
+                auto& ev = events[evIdx];
+                switch (ev.type) {
+                    case 0: noteOn(ev.channel, ev.p1, ev.p2); break; // noteOn
+                    case 1: noteOff(ev.channel, ev.p1); break; // noteOff
+                    case 2: controlChange(ev.channel, ev.p1, ev.p2); break; // CC
+                    case 3: pitchBend(ev.channel, ev.p1); break; // pitchBend
                 }
                 evIdx++;
             }
