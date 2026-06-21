@@ -542,7 +542,18 @@ void SFSynthesizer::controlChange(int channel, int cc, int value) {
         case 7: ch.volume = value; break;
         case 10: ch.pan = value; break;
         case 11: ch.expression = value; break;
-        case 38: ch.rpnValue = (value & 0x7F) | ((ch.rpnValue & 0x7F00)); break; // Data Entry LSB
+        case 38: {
+            ch.rpnValue = (value & 0x7F) | ((ch.rpnValue & 0x7F00)); // Data Entry LSB
+            // RPN再評価: LSB変更後にfine/coarse tune等を再計算
+            if (ch.rpnMSB == 0 && ch.rpnLSB == 0) {
+                ch.pitchBendRange = (ch.rpnValue >> 7) & 0x7F;
+            } else if (ch.rpnMSB == 0 && ch.rpnLSB == 1) {
+                ch.fineTune = ((ch.rpnValue - 8192) / 8192.0) * 100.0;
+            } else if (ch.rpnMSB == 0 && ch.rpnLSB == 2) {
+                ch.coarseTune = (ch.rpnValue >> 7) - 64;
+            }
+            break;
+        }
         case 32: ch.bankLSB = value; break; // Bank Select LSB
         case 64: {
             int prevSustain = ch.sustain;
@@ -563,8 +574,8 @@ void SFSynthesizer::controlChange(int channel, int cc, int value) {
         case 91: ch.reverb = value; break;
         case 93: ch.chorus = value; break;
         case 94: ch.delay = value; break;
-        case 98: ch.rpnLSB = value; break;  // NRPN LSB
-        case 99: ch.rpnMSB = value; break;  // NRPN MSB
+        case 98: ch.nrpnLSB = value; break;  // NRPN LSB
+        case 99: ch.nrpnMSB = value; break;  // NRPN MSB
         case 100: ch.rpnLSB = value; break; // RPN LSB
         case 101: ch.rpnMSB = value; break; // RPN MSB
         case 6: {  // CC6: Data Entry MSB (RPN)
@@ -1126,6 +1137,14 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             // NRPN MSB (CC99)
             for (auto& [t, v] : expr.nrpnMSB[ch]) {
                 if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 99, v);
+            }
+            // RPN LSB (CC100)
+            for (auto& [t, v] : expr.rpnLSB[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 100, v);
+            }
+            // RPN MSB (CC101)
+            for (auto& [t, v] : expr.rpnMSB[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd) controlChange(ch, 101, v);
             }
         }
 

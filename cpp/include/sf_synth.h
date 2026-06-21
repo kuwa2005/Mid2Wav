@@ -72,6 +72,8 @@ struct ChannelState {
     int rpnLSB = 127;  // 127 = no RPN selected
     int rpnMSB = 127;
     int rpnValue = 0;
+    int nrpnLSB = 0;
+    int nrpnMSB = 0;
 };
 
 struct ConvertOptions;

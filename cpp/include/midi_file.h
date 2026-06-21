@@ -66,6 +66,10 @@ struct MidiExpression {
     std::vector<std::pair<int64_t, int>> nrpnLSB[16];
     // NRPN MSB (CC99): (tick, value 0-127)
     std::vector<std::pair<int64_t, int>> nrpnMSB[16];
+    // RPN LSB (CC100): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> rpnLSB[16];
+    // RPN MSB (CC101): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> rpnMSB[16];
     // GS SysEx: リバーブパラメータ
     std::vector<std::pair<int64_t, int>> sysReverbType;      // (tick, type 0-5)
     std::vector<std::pair<int64_t, int>> sysReverbLevel;     // (tick, level 0-127)
@@ -109,8 +113,8 @@ struct MidiExpression {
     void addDataEntryLSB(int ch, int64_t tick, int value) { dataEntryLSB[ch].push_back({tick, value}); }
     void addNrpnLSB(int ch, int64_t tick, int value) { nrpnLSB[ch].push_back({tick, value}); }
     void addNrpnMSB(int ch, int64_t tick, int value) { nrpnMSB[ch].push_back({tick, value}); }
-    void addRpnLSB(int ch, int64_t tick, int value) { nrpnLSB[ch].push_back({tick, value}); }
-    void addRpnMSB(int ch, int64_t tick, int value) { nrpnMSB[ch].push_back({tick, value}); }
+    void addRpnLSB(int ch, int64_t tick, int value) { rpnLSB[ch].push_back({tick, value}); }
+    void addRpnMSB(int ch, int64_t tick, int value) { rpnMSB[ch].push_back({tick, value}); }
 
     void sort() {
         for (int ch = 0; ch < 16; ch++) {
@@ -136,6 +140,8 @@ struct MidiExpression {
             std::sort(dataEntryLSB[ch].begin(), dataEntryLSB[ch].end(), cmp);
             std::sort(nrpnLSB[ch].begin(), nrpnLSB[ch].end(), cmp);
             std::sort(nrpnMSB[ch].begin(), nrpnMSB[ch].end(), cmp);
+            std::sort(rpnLSB[ch].begin(), rpnLSB[ch].end(), cmp);
+            std::sort(rpnMSB[ch].begin(), rpnMSB[ch].end(), cmp);
         }
         // GS SysEx sort
         auto cmp2 = [](auto& a, auto& b) { return a.first < b.first; };
