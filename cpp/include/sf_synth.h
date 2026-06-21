@@ -36,6 +36,7 @@ struct SF2Voice {
     double releaseLevel = 0.0;
     double filterFc = 13500.0;
     double filterQ = 0.7;
+    bool filterActive = false;
     double filterState[4] = {}; // biquad: x[n-1], x[n-2], y[n-1], y[n-2]
     double vibratoDepth = 0.0;  // CC1 modulation depth (semitones)
     uint32_t age = 0;            // Voice age for stealing priority
@@ -117,6 +118,7 @@ private:
         double release = 0.0;
         double filterFc = 13500.0;
         double filterQ = 0.7;
+        bool filterActive = false; // true if SF2 gen 43 explicitly set
         double sampleRate = 44100.0;
         uint32_t sampleStart = 0;
         uint32_t sampleEnd = 0;

@@ -157,7 +157,7 @@ void SFSynthesizer::buildPresetZones(int channel) {
                     case 36: z.decay = timecentsToSeconds(a); break;
                     case 37: z.sustain = 1.0 - a / 1000.0; break;
                     case 38: z.release = timecentsToSeconds(a); break;
-                    case 43: z.filterFc = std::pow(2.0, a / 1200.0) * 8.176; break;
+                    case 43: z.filterFc = std::pow(2.0, a / 1200.0) * 8.176; z.filterActive = true; break;
                     case 44: z.filterQ = a / 10.0; break;
                     case 53: z.sampleIndex = a; break;
                     case 57: z.exclusiveClass = a; break; // exclusive class (hi-hat choke)
@@ -326,6 +326,7 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
             // Filter
             v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
             v.filterQ = std::max(0.5, zone.filterQ);
+            v.filterActive = zone.filterActive;
             std::fill(v.filterState, v.filterState + 4, 0.0);
 
             // Vibrato depth from modulation (CC1)
@@ -428,6 +429,7 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
                 v.releaseLevel = 1.0;
                 v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
                 v.filterQ = std::max(0.5, zone.filterQ);
+                v.filterActive = zone.filterActive;
                 std::fill(v.filterState, v.filterState + 4, 0.0);
                 v.vibratoDepth = m_channels[channel].modulation / 127.0 * 2.0;
                 v.basePitchRatio = v.pitchRatio;
@@ -746,7 +748,8 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
             modulatedFc *= std::pow(2.0, lfoValue * v.vibratoDepth * 0.5 / 12.0);
         }
         modulatedFc = std::clamp(modulatedFc, 20.0, m_sampleRate * 0.45);
-        if (modulatedFc < m_sampleRate * 0.45) {
+        // Skip filter if SF2 didn't explicitly set filterFc (default 13500 = no filter)
+        if (modulatedFc < m_sampleRate * 0.45 && v.filterActive) {
             double w0 = 2.0 * M_PI * modulatedFc / m_sampleRate;
             double alpha = std::sin(w0) / (2.0 * v.filterQ);
             double a0 = 1.0 + alpha;
@@ -767,8 +770,8 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         double envAmp = v.envLevel * v.amplitude;
         double chVol = m_channels[v.channel].volume / 127.0;
         double chExpr = m_channels[v.channel].expression / 127.0;
-        double breathAmp = 0.5 + 0.5 * m_channels[v.channel].breath / 127.0;
-        double footAmp = 0.5 + 0.5 * m_channels[v.channel].foot / 127.0;
+        double breathAmp = m_channels[v.channel].breath > 0 ? (0.5 + 0.5 * m_channels[v.channel].breath / 127.0) : 1.0;
+        double footAmp = m_channels[v.channel].foot > 0 ? (0.5 + 0.5 * m_channels[v.channel].foot / 127.0) : 1.0;
         double tremoloAmp = 1.0;
         if (v.vibratoDepth > 0.0 && !isDrumChannel) {
             tremoloAmp = 1.0 + lfoValue * v.vibratoDepth * 0.1;
