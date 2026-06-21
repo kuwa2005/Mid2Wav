@@ -77,6 +77,7 @@ void SFSynthesizer::buildPresetZones(int channel) {
                     presets[pIdx + 1].presetBagNdx : pBags.size();
     int pBank = presets[pIdx].bank;
 
+    int zoneCount = 0;
     for (size_t b = bagStart; b < bagEnd; b++) {
         size_t genEnd = (b + 1 < pBags.size()) ? pBags[b + 1].genNdx : pGens.size();
 
@@ -207,16 +208,20 @@ void SFSynthesizer::buildPresetZones(int channel) {
 
             z.sampleRate = s.sampleRate;
             if (z.rootKey < 0) z.rootKey = (s.originalKey > 0) ? s.originalKey : 60.0;
-            z.rootKey += z.fineTune / 100.0;
+            z.rootKey += z.fineTune;
 
             z.sampleStart = s.start;
             z.sampleEnd = s.end;
             z.loopStart = s.startLoop;
             z.loopEnd = s.endLoop;
-            z.loop = (s.sampleType & 0x1000) != 0;
+            z.loop = ((s.sampleType >> 8) & 0xFF) == 1; // SF2: mode 1 = loop continuously
 
             m_channelZones[channel].push_back(z);
+            zoneCount++;
         }
+    }
+    if (zoneCount > 0) {
+        std::cout << "    [Zones] ch=" << channel << " " << zoneCount << " zones built" << std::endl;
     }
 }
 
@@ -232,7 +237,6 @@ bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZon
         if (note < z.keyLow || note > z.keyHigh) continue;
         if (velocity < z.velLow || velocity > z.velHigh) continue;
         if (isDrum) {
-            // ドラム: 最も狭いkeyRangeを優先
             int range = z.keyHigh - z.keyLow;
             if (range < bestRange) {
                 bestRange = range;
@@ -240,7 +244,6 @@ bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZon
                 found = true;
             }
         } else {
-            // メロディ: ベロシティ範囲の中心に最も近いゾーンを選択
             int velCenter = (z.velLow + z.velHigh) / 2;
             int velDist = std::abs(velocity - velCenter);
             if (velDist < bestVelDist) {
@@ -249,6 +252,13 @@ bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZon
                 found = true;
             }
         }
+    }
+
+    if (found && m_channels[channel].program == 0 && note == 60) {
+        std::cout << "    [Resolve] ch=" << channel << " note=" << note << " vel=" << velocity
+                  << " -> sample[" << out.sampleIndex << "] rootKey=" << out.rootKey
+                  << " key=" << out.keyLow << "-" << out.keyHigh
+                  << " vel=" << out.velLow << "-" << out.velHigh << std::endl;
     }
     return found;
 }
@@ -484,6 +494,14 @@ void SFSynthesizer::programChange(int channel, int program, int bank) {
     m_channels[channel].program = program;
     m_channels[channel].bank = bank;
     if (!m_fallbackMode && m_sf2) {
+        int pIdx = m_sf2->findPreset(bank, program);
+        if (pIdx >= 0) {
+            std::cout << "    [Preset] ch=" << channel << " bank=" << bank << " prog=" << program 
+                      << " -> preset[" << pIdx << "] \"" << m_sf2->presets()[pIdx].name << "\"" << std::endl;
+        } else {
+            std::cout << "    [Preset] ch=" << channel << " bank=" << bank << " prog=" << program 
+                      << " -> NOT FOUND" << std::endl;
+        }
         buildPresetZones(channel);
     }
 }
@@ -1071,7 +1089,10 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                     channelPresetKey[n.channel] = needKey;
                 }
                 int shiftedNote = std::clamp(n.note + opts.pitchShift, 0, 127);
-                events.push_back({noteStart - pos, n.channel, shiftedNote, n.velocity, true});
+                int sampleOffset = noteStart - pos;
+                if (sampleOffset < 0) sampleOffset = 0;
+                if (sampleOffset >= blockLen) sampleOffset = blockLen - 1;
+                events.push_back({sampleOffset, n.channel, shiftedNote, n.velocity, true});
                 active.push_back({&n, false});
             }
         }
@@ -1079,9 +1100,9 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         for (auto& a : active) {
             if (a.offDone) continue;
             int noteEnd = (int)(midi.tickToSeconds(a.note->endTime, a.note->track) * m_sampleRate);
-            if (noteEnd <= pos) {
+            if (noteEnd >= pos && noteEnd < blockEnd) {
                 int shiftedNote = std::clamp(a.note->note + opts.pitchShift, 0, 127);
-                events.push_back({0, a.note->channel, shiftedNote, 0, false});
+                events.push_back({noteEnd - pos, a.note->channel, shiftedNote, 0, false});
                 a.offDone = true;
             }
         }
