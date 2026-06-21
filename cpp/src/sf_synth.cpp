@@ -1272,6 +1272,7 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         totalSec = std::max(totalSec, t);
     }
     int totalSamples = (int)(totalSec * m_sampleRate);
+    std::cout << "    [Debug] totalSec=" << totalSec << " totalSamples=" << totalSamples << std::endl;
     const char* gmNames[] = {
         "Acoustic Grand Piano","Bright Acoustic Piano","Electric Grand Piano","Honky-tonk Piano",
         "Electric Piano 1","Electric Piano 2","Harpsichord","Clavi",
@@ -1337,12 +1338,19 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         // program変更を適用
         chSynth.programChange(0, chProgram, chBank);
 
+        std::cout << "    Ch " << (ch + 1) << ": program=" << chProgram
+                  << " bank=" << chBank
+                  << " notes=" << noteCount << std::endl;
+
         // チャンネル番号を0にマッピングしてレンダリング
         std::vector<MidiNote> mapped = chNotes;
         for (auto& n : mapped) n.channel = 0;
 
+        std::cout << "    [Debug] Rendering ch " << (ch + 1) << "..." << std::endl;
+
         std::vector<float> left(totalSamples, 0.0f);
         std::vector<float> right(totalSamples, 0.0f);
+        std::cout << "    [Debug] Allocated " << (totalSamples * 2 * sizeof(float) / 1024 / 1024) << "MB for ch " << (ch+1) << std::endl;
 
         // レンダリング
         const int BS = 1024;
