@@ -176,10 +176,8 @@ void MidiFile::extractNotes() {
         uint8_t runningStatus = 0;
         int64_t currentTick = 0;
 
-        // チャンネル×ノートの状態管理
-        std::array<std::array<int64_t, 128>, 16> noteOnTick{};
-        std::array<std::array<bool, 128>, 16> noteOn{};
-        std::array<std::array<uint8_t, 128>, 16> noteOnVel{};
+        // チャンネル×ノートの状態管理 — スタックベース（同一ch+note複数on対応）
+        std::array<std::array<std::vector<std::pair<int64_t, uint8_t>>, 128>, 16> noteOnStack;
         std::vector<MidiEvent> trackEvts;
         std::vector<std::pair<int64_t, double>> trackTempo;
 
@@ -296,27 +294,29 @@ void MidiFile::extractNotes() {
                 evt.data1 = note; evt.data2 = vel;
                 trackEvts.push_back(evt);
                 if (vel > 0) {
-                    noteOnTick[channel][note] = currentTick;
-                    noteOn[channel][note] = true;
-                    noteOnVel[channel][note] = vel;
-                } else if (noteOn[channel][note]) {
+                    noteOnStack[channel][note].push_back({currentTick, vel});
+                } else if (!noteOnStack[channel][note].empty()) {
+                    auto [startTick, startVel] = noteOnStack[channel][note].back();
+                    noteOnStack[channel][note].pop_back();
                     MidiNote n; n.channel = channel; n.note = note;
-                    n.velocity = noteOnVel[channel][note];
-                    n.startTime = noteOnTick[channel][note]; n.endTime = currentTick;
+                    n.velocity = startVel;
+                    n.startTime = startTick; n.endTime = currentTick;
                     n.track = trackIdx;
-                    m_notes.push_back(n); noteOn[channel][note] = false;
+                    m_notes.push_back(n);
                 }
             } else if (msgType == 0x80) {
                 uint8_t note = trackData[pos++];
                 uint8_t vel = trackData[pos++];
                 evt.data1 = note; evt.data2 = vel;
                 trackEvts.push_back(evt);
-                if (noteOn[channel][note]) {
+                if (!noteOnStack[channel][note].empty()) {
+                    auto [startTick, startVel] = noteOnStack[channel][note].back();
+                    noteOnStack[channel][note].pop_back();
                     MidiNote n; n.channel = channel; n.note = note;
-                    n.velocity = noteOnVel[channel][note];
-                    n.startTime = noteOnTick[channel][note]; n.endTime = currentTick;
+                    n.velocity = startVel;
+                    n.startTime = startTick; n.endTime = currentTick;
                     n.track = trackIdx;
-                    m_notes.push_back(n); noteOn[channel][note] = false;
+                    m_notes.push_back(n);
                 }
             } else if (msgType == 0xB0) {
                 uint8_t cc = trackData[pos++];
@@ -475,13 +475,14 @@ void MidiFile::extractNotes() {
         // トラック終端で残存noteOnをフラッシュ
         for (int ch = 0; ch < 16; ch++) {
             for (int note = 0; note < 128; note++) {
-                if (noteOn[ch][note]) {
+                while (!noteOnStack[ch][note].empty()) {
+                    auto [startTick, startVel] = noteOnStack[ch][note].back();
+                    noteOnStack[ch][note].pop_back();
                     MidiNote n; n.channel = ch; n.note = note;
-                    n.velocity = noteOnVel[ch][note];
-                    n.startTime = noteOnTick[ch][note]; n.endTime = currentTick;
+                    n.velocity = startVel;
+                    n.startTime = startTick; n.endTime = currentTick;
                     n.track = trackIdx;
                     m_notes.push_back(n);
-                    noteOn[ch][note] = false;
                 }
             }
         }

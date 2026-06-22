@@ -161,13 +161,24 @@ void SFSynthesizer::buildPresetZones(int channel) {
     auto mergeState = [](const GenState& a, const GenState& b) {
         GenState r = a;
         if (b.hasKeyRange) {
-            r.zone.keyLow = b.zone.keyLow;
-            r.zone.keyHigh = b.zone.keyHigh;
+            if (r.hasKeyRange) {
+                // SF2 spec: preset narrows instrument range → intersection
+                r.zone.keyLow = std::max(r.zone.keyLow, b.zone.keyLow);
+                r.zone.keyHigh = std::min(r.zone.keyHigh, b.zone.keyHigh);
+            } else {
+                r.zone.keyLow = b.zone.keyLow;
+                r.zone.keyHigh = b.zone.keyHigh;
+            }
             r.hasKeyRange = true;
         }
         if (b.hasVelRange) {
-            r.zone.velLow = b.zone.velLow;
-            r.zone.velHigh = b.zone.velHigh;
+            if (r.hasVelRange) {
+                r.zone.velLow = std::max(r.zone.velLow, b.zone.velLow);
+                r.zone.velHigh = std::min(r.zone.velHigh, b.zone.velHigh);
+            } else {
+                r.zone.velLow = b.zone.velLow;
+                r.zone.velHigh = b.zone.velHigh;
+            }
             r.hasVelRange = true;
         }
         r.zone.attenuation += b.zone.attenuation;
@@ -226,6 +237,7 @@ void SFSynthesizer::buildPresetZones(int channel) {
             GenState state = mergeState(pState, mergeState(instGlobal, iLocal));
             ResolvedZone z = state.zone;
             if (z.sampleIndex < 0 || z.sampleIndex >= (int)samples.size()) continue;
+            if (z.keyLow > z.keyHigh || z.velLow > z.velHigh) continue; // empty intersection → skip
 
             const auto& s = samples[z.sampleIndex];
 
