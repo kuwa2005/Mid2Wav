@@ -14,6 +14,17 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+namespace {
+
+// GM/GS: Ch10 (index 9) defaults to drum bank 128 unless sysPartMode explicitly sets Melody (0).
+int effectiveBankMSB(int ch, int bankMSB, int64_t tick, const MidiExpression& expr) {
+    if (ch != 9) return bankMSB;
+    if (expr.getValueAtTick(expr.sysPartMode[ch], tick, -1) == 0) return bankMSB;
+    return 128;
+}
+
+} // namespace
+
 // ─────────────────────────── utilities ───────────────────────────
 
 // ─────────────────────────── init ───────────────────────────────
@@ -894,25 +905,14 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             if (t <= firstNoteTick) initBank = v;
         }
 
-        // GM規約: Ch10 (0-indexed 9) はデフォルトでドラム(bank=128)
-        // GS Part Mode SysExで明示的にmelody(0x00)とされた場合のみ bank=0
         int partMode = expr.getValueAtTick(expr.sysPartMode[ch], firstNoteTick, -1);
-        if (ch == 9) {
-            if (partMode == 0) {
-                // SysExで明示的にメロディ指定
-            } else {
-                initBank = 128;
-            }
-        }
+        initBank = effectiveBankMSB(ch, initBank, firstNoteTick, expr);
 
         m_channels[ch].program = initProgram;
         m_channels[ch].bank = initBank;
 
-        // GS Part Mode SysEx: Ch10はデフォルトでリズム(bank=128)
-        // Ch1-9/11-16: partMode==1でもMIDIファイルのCC0 MSBを優先
-        if (ch == 9 && partMode != 0) {
-            m_channels[ch].bank = 128; // GM drum default
-        } else if (ch != 9 && partMode == 1 && initBank == 0) {
+        // Ch1-9/11-16: partMode==1 かつ CC0 未指定 → bank=128
+        if (ch != 9 && partMode == 1 && initBank == 0) {
             // SysExがリズム指定 but bank selectなし → bank=128
             m_channels[ch].bank = 128; // GM drum default
         }
@@ -992,110 +992,63 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         int blockEnd = std::min(pos + BS, totalSamples);
         int blockLen = blockEnd - pos;
 
-        // Apply MIDI expression data (CC, pitch bend, program change) for this block's tick range
+        // tickToSecondsの逆変換（区間BPM補間）
+        const auto& tmap = midi.tempoMap();
+        int ts = (int)tmap.size();
+        auto tickForTime = [&](double sec) -> int64_t {
+            if (ts == 0) {
+                return (int64_t)(sec * midi.ticksPerQuarterNote() * 2.0);
+            }
+            double accumSec = 0;
+            int64_t prevTick = 0;
+            for (int i = 0; i < ts; i++) {
+                double tickSec = midi.tickToSeconds(tmap[i].first);
+                double intervalSec = tickSec - accumSec;
+                if (intervalSec > 0 && accumSec + intervalSec > sec) {
+                    double frac = (sec - accumSec) / intervalSec;
+                    return prevTick + (int64_t)(frac * (tmap[i].first - prevTick));
+                }
+                accumSec = tickSec;
+                prevTick = tmap[i].first;
+            }
+            if (ts > 0) {
+                double lastBPM = tmap[ts - 1].second;
+                double lastTickSec = midi.tickToSeconds(tmap[ts - 1].first);
+                double excessSec = sec - lastTickSec;
+                return tmap[ts - 1].first + (int64_t)(excessSec * midi.ticksPerQuarterNote() * lastBPM / 60.0);
+            }
+            return (int64_t)(sec * midi.ticksPerQuarterNote() * 2.0);
+        };
+
         int64_t blockTickStart = 0, blockTickEnd = 0;
         {
             double blockSecStart = (double)pos / m_sampleRate;
             double blockSecEnd = (double)blockEnd / m_sampleRate;
-            const auto& tmap = midi.tempoMap();
-            int ts = (int)tmap.size();
-
-            // tickToSecondsの逆変換（区間BPM補間）
-            auto tickForTime = [&](double sec) -> int64_t {
-                if (ts == 0) {
-                    // デフォルトテンポ 120 BPM
-                    return (int64_t)(sec * midi.ticksPerQuarterNote() * 2.0);
-                }
-                // 各テンポ区間を線形補間
-                double accumSec = 0;
-                int64_t prevTick = 0;
-                for (int i = 0; i < ts; i++) {
-                    double tickSec = midi.tickToSeconds(tmap[i].first);
-                    double intervalSec = tickSec - accumSec;
-                    if (intervalSec > 0 && accumSec + intervalSec > sec) {
-                        // この区間内で線形補間
-                        double frac = (sec - accumSec) / intervalSec;
-                        return prevTick + (int64_t)(frac * (tmap[i].first - prevTick));
-                    }
-                    accumSec = tickSec;
-                    prevTick = tmap[i].first;
-                }
-                // テンポ区間外: 最後のBPMで外挿
-                if (ts > 0) {
-                    double lastBPM = tmap[ts - 1].second;
-                    double lastTickSec = midi.tickToSeconds(tmap[ts - 1].first);
-                    double excessSec = sec - lastTickSec;
-                    return tmap[ts - 1].first + (int64_t)(excessSec * midi.ticksPerQuarterNote() * lastBPM / 60.0);
-                }
-                return (int64_t)(sec * midi.ticksPerQuarterNote() * 2.0);
-            };
             blockTickStart = tickForTime(blockSecStart);
             blockTickEnd = tickForTime(blockSecEnd);
         }
 
         const auto& expr = midi.expression();
-        for (int ch = 0; ch < 16; ch++) {
-            // Bank Select MSB → Bank Select LSB → Program Change の順に適用（MIDI仕様）
-            bool needProgramChange = false;
-            bool hasBankSelectInBlock = false;
-            int newProgram = m_channels[ch].program;
-            for (auto& [t, v] : expr.bankSelectMSB[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) { m_channels[ch].bank = v; hasBankSelectInBlock = true; }
-            }
-            for (auto& [t, v] : expr.bankSelectLSB[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) { m_channels[ch].bankLSB = v; hasBankSelectInBlock = true; }
-            }
-            for (auto& [t, v] : expr.programChange[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) {
-                    newProgram = v;
-                    needProgramChange = true;
-                }
-            }
-            // GM規約: Ch10 はデフォルトでドラム。GS Part Mode SysExでmelody(0x00)に変更された場合のみ bank=0
-            if (ch == 9) {
-                int latestPartMode = -1;
-                for (auto& [t, v] : expr.sysPartMode[ch]) {
-                    if (t <= blockTickEnd) latestPartMode = v;
-                }
-                if (latestPartMode == 0) {
-                    // SysExで明示的にメロディ指定 → bank Selectの値を信頼
-                } else {
-                    m_channels[ch].bank = 128; // GM drum default
-                }
-            }
-            // GS Part Mode SysEx: 全チャンネル対象（Ch10以外もリズム/メロディ切替可）
-            for (auto& [t, v] : expr.sysPartMode[ch]) {
-                if (t >= blockTickStart && t < blockTickEnd) {
-                    if (v == 1) {
-                        // SysEx Part Mode: リズム指定 → bank=128（GS仕様準拠）
-                        m_channels[ch].bank = 128; // GM drum default
-                        programChange(ch, m_channels[ch].program, m_channels[ch].bank);
-                        channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
-                    } else if (v == 0 && ch == 9) {
-                        // Ch10 メロディ化: CC0 MSBを復元
-                        int restoredBank = 0;
-                        for (auto& [bt, bv] : expr.bankSelectMSB[ch]) {
-                            if (bt <= blockTickEnd) restoredBank = bv;
-                        }
-                        m_channels[ch].bank = restoredBank;
-                        programChange(ch, m_channels[ch].program, m_channels[ch].bank);
-                        channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
-                    }
-                    // Ch1-9,11-16: v==0は無視（SysExなしのデフォルトはGM=bank128でなくCC0の値を信頼）
-                }
-            }
-            if (needProgramChange) {
-                programChange(ch, newProgram, m_channels[ch].bank);
-                channelPresetKey[ch] = newProgram * 256 + m_channels[ch].bank;
-            } else if (hasBankSelectInBlock) {
-                programChange(ch, m_channels[ch].program, m_channels[ch].bank);
-                channelPresetKey[ch] = m_channels[ch].program * 256 + m_channels[ch].bank;
+
+        // Ch10: CC0=0 等で bank が melody に戻るのを防ぐ（partMode==0 のメロディ例外のみ許可）
+        {
+            int pm = expr.getValueAtTick(expr.sysPartMode[9], blockTickStart, -1);
+            if (pm != 0 && m_channels[9].bank != 128) {
+                m_channels[9].bank = 128;
+                programChange(9, m_channels[9].program, 128);
+                channelPresetKey[9] = m_channels[9].program * 256 + 128;
             }
         }
 
-        // Note On/Off を正確なサンプル位置で処理
-        // ブロック内の全ノート・CCイベントを集めてソート
-        struct BlockEvent { int sampleOffset; int channel; int type; int p1; int p2; };
+        auto tickToSampleOffset = [&](int64_t tick) -> int {
+            int s = (int)(midi.tickToSeconds(tick, 0) * m_sampleRate) - pos;
+            if (s < 0) s = 0;
+            if (s >= blockLen) s = blockLen - 1;
+            return s;
+        };
+
+        // Note On/Off / CC / bank / PC を正確なサンプル位置で処理
+        struct BlockEvent { int sampleOffset; int channel; int type; int p1; int p2; int64_t tick; };
         // type: 0=noteOff, 1=CC, 2=pitchBend, 3=noteOn, 4=bankMSB, 5=bankLSB, 6=programChange, 7=sysPartMode
         std::vector<BlockEvent> events;
 
@@ -1112,7 +1065,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 int sampleOffset = noteStart - pos;
                 if (sampleOffset < 0) sampleOffset = 0;
                 if (sampleOffset >= blockLen) sampleOffset = blockLen - 1;
-                events.push_back({sampleOffset, n.channel, 3, shiftedNote, n.velocity});
+                events.push_back({sampleOffset, n.channel, 3, shiftedNote, n.velocity, n.startTime});
                 active.push_back({&n, false});
             }
         }
@@ -1122,22 +1075,19 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             int noteEnd = (int)(midi.tickToSeconds(a.note->endTime, a.note->track) * m_sampleRate);
             if (noteEnd >= pos && noteEnd < blockEnd) {
                 int shiftedNote = std::clamp(a.note->note + opts.pitchShift, 0, 127);
-                events.push_back({noteEnd - pos, a.note->channel, 0, shiftedNote, 0});
+                events.push_back({noteEnd - pos, a.note->channel, 0, shiftedNote, 0, a.note->endTime});
                 a.offDone = true;
             }
         }
         active.erase(std::remove_if(active.begin(), active.end(),
                                     [](const ActiveNote& a) { return a.offDone; }), active.end());
 
-        // CC events をサンプル精度で追加
+        // CC / bank / PC / part mode をサンプル精度で追加
         for (int ch = 0; ch < 16; ch++) {
             auto addCC = [&](const std::vector<std::pair<int64_t, int>>& ccVec, int ccNum) {
                 for (auto& [t, v] : ccVec) {
                     if (t >= blockTickStart && t < blockTickEnd) {
-                        int sampleOffset = (int)(midi.tickToSeconds(t, 0) * m_sampleRate) - pos;
-                        if (sampleOffset < 0) sampleOffset = 0;
-                        if (sampleOffset >= blockLen) sampleOffset = blockLen - 1;
-                        events.push_back({sampleOffset, ch, 1, ccNum, v});
+                        events.push_back({tickToSampleOffset(t), ch, 1, ccNum, v, t});
                     }
                 }
             };
@@ -1159,28 +1109,122 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             addCC(expr.reverbDepth[ch], 91);
             addCC(expr.chorusDepth[ch], 93);
             addCC(expr.delayDepth[ch], 94);
+            for (auto& [t, v] : expr.bankSelectMSB[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd)
+                    events.push_back({tickToSampleOffset(t), ch, 4, v, 0, t});
+            }
+            for (auto& [t, v] : expr.bankSelectLSB[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd)
+                    events.push_back({tickToSampleOffset(t), ch, 5, v, 0, t});
+            }
+            for (auto& [t, v] : expr.programChange[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd)
+                    events.push_back({tickToSampleOffset(t), ch, 6, v, 0, t});
+            }
+            for (auto& [t, v] : expr.sysPartMode[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd)
+                    events.push_back({tickToSampleOffset(t), ch, 7, v, 0, t});
+            }
             // Pitch Bend
             for (auto& [t, v] : expr.pitchBend[ch]) {
                 if (t >= blockTickStart && t < blockTickEnd) {
-                    int sampleOffset = (int)(midi.tickToSeconds(t, 0) * m_sampleRate) - pos;
-                    if (sampleOffset < 0) sampleOffset = 0;
-                    if (sampleOffset >= blockLen) sampleOffset = blockLen - 1;
-                    events.push_back({sampleOffset, ch, 2, v, 0});
+                    events.push_back({tickToSampleOffset(t), ch, 2, v, 0, t});
                 }
             }
         }
 
-        // イベントをソート
-        std::sort(events.begin(), events.end(), [](const BlockEvent& a, const BlockEvent& b) {
+        // イベントをソート: noteOff → bank/PC → CC → pitchBend → noteOn
+        auto eventPriority = [](int type) {
+            switch (type) {
+                case 0: return 0; // noteOff
+                case 4: return 1; // bank MSB
+                case 5: return 2; // bank LSB
+                case 6: return 3; // program
+                case 7: return 4; // part mode
+                case 1: return 5; // CC
+                case 2: return 6; // pitch bend
+                case 3: return 7; // noteOn
+                default: return 8;
+            }
+        };
+        auto ccPriority = [](int cc) {
+            if (cc == 99 || cc == 98 || cc == 101 || cc == 100) return 0;
+            if (cc == 6 || cc == 38 || cc == 96 || cc == 97) return 1;
+            if (cc == 7) return 2;
+            if (cc == 11) return 3;
+            if (cc == 10) return 4;
+            return 5;
+        };
+        std::sort(events.begin(), events.end(), [&](const BlockEvent& a, const BlockEvent& b) {
             if (a.sampleOffset != b.sampleOffset) return a.sampleOffset < b.sampleOffset;
-            auto ccPriority = [](int cc) {
-                if (cc == 99 || cc == 98 || cc == 101 || cc == 100) return 0; // NRPN/RPN select
-                if (cc == 6 || cc == 38 || cc == 96 || cc == 97) return 1;    // Data Entry
-                return 2;
-            };
+            int pa = eventPriority(a.type), pb = eventPriority(b.type);
+            if (pa != pb) return pa < pb;
             if (a.type == 1 && b.type == 1) return ccPriority(a.p1) < ccPriority(b.p1);
-            return a.type < b.type; // noteOff before CC before noteOn
+            return false;
         });
+
+        // GS SysEx: グローバルエフェクトパラメータ（ブロック単位）
+        for (auto& [t, v] : expr.sysReverbLevel) {
+            if (t >= blockTickStart && t < blockTickEnd) m_reverbLevel = v / 127.0f;
+        }
+        for (auto& [t, v] : expr.sysChorusLevel) {
+            if (t >= blockTickStart && t < blockTickEnd) m_chorusLevel = v / 127.0f;
+        }
+        for (auto& [t, v] : expr.sysDelayLevel) {
+            if (t >= blockTickStart && t < blockTickEnd) m_delayLevel = v / 127.0f;
+        }
+        for (auto& [t, v] : expr.sysDelayTime) {
+            if (t >= blockTickStart && t < blockTickEnd) m_delayTime = v / 127.0f;
+        }
+        for (auto& [t, v] : expr.sysDelayFeed) {
+            if (t >= blockTickStart && t < blockTickEnd) m_delayFeedback = v / 127.0f;
+        }
+
+        auto applyFxSegment = [&](float* segL, float* segR, int len, int segEndSample) {
+            int64_t segTick = tickForTime((double)(pos + segEndSample) / m_sampleRate);
+            float reverbSum = 0.0f;
+            int reverbCount = 0;
+            for (int ch = 0; ch < 16; ch++) {
+                int send = m_channels[ch].reverb;
+                send = std::max(send, expr.getValueAtTick(expr.sysPartReverbSend[ch], segTick, 0));
+                if (send > 0) {
+                    reverbSum += send / 127.0f;
+                    reverbCount++;
+                }
+            }
+            float reverbMix = (reverbCount > 0) ? std::min(reverbSum / (float)reverbCount, 1.0f) : m_reverbLevel;
+            if (reverbMix > 0.001f) m_reverb.process(segL, segR, len, reverbMix * 0.6f);
+
+            float chorusSum = 0.0f;
+            int chorusCount = 0;
+            for (int ch = 0; ch < 16; ch++) {
+                int send = m_channels[ch].chorus;
+                send = std::max(send, expr.getValueAtTick(expr.sysPartChorusSend[ch], segTick, 0));
+                if (send > 0) {
+                    chorusSum += send / 127.0f;
+                    chorusCount++;
+                }
+            }
+            float chorusMix = (chorusCount > 0) ? std::min(chorusSum / (float)chorusCount, 1.0f) : m_chorusLevel;
+            if (chorusMix > 0.001f) m_chorus.process(segL, segR, len, chorusMix * 127.0f);
+
+            float delaySum = 0.0f;
+            int delayCount = 0;
+            for (int ch = 0; ch < 16; ch++) {
+                int send = m_channels[ch].delay;
+                send = std::max(send, expr.getValueAtTick(expr.sysPartDelaySend[ch], segTick, 0));
+                if (send > 0) {
+                    delaySum += send / 127.0f;
+                    delayCount++;
+                }
+            }
+            float delayMix = (delayCount > 0) ? std::min(delaySum / (float)delayCount, 1.0f) : m_delayLevel;
+            if (delayMix > 0.001f) {
+                float delayTime = 0.1f + m_delayTime * 0.9f;
+                float feedback = 0.2f + m_delayFeedback * 0.5f;
+                m_delay.process(segL, segR, len, delayTime, feedback, delayMix * 0.4f);
+            }
+        };
 
         // ブロックをイベントで区切って処理
         std::vector<float> bl(blockLen, 0.0f), br(blockLen, 0.0f);
@@ -1198,6 +1242,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 std::vector<float> segL(segEnd - segStart, 0.0f);
                 std::vector<float> segR(segEnd - segStart, 0.0f);
                 processBlock(segL, segR, segEnd - segStart);
+                applyFxSegment(segL.data(), segR.data(), segEnd - segStart, segEnd);
                 for (int i = 0; i < segEnd - segStart; i++) {
                     bl[segStart + i] = segL[i];
                     br[segStart + i] = segR[i];
@@ -1208,89 +1253,52 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             while (evIdx < (int)events.size() && events[evIdx].sampleOffset == segEnd) {
                 auto& ev = events[evIdx];
                 switch (ev.type) {
-                    case 0: noteOff(ev.channel, ev.p1); break; // noteOff
-                    case 1: controlChange(ev.channel, ev.p1, ev.p2); break; // CC
-                    case 2: pitchBend(ev.channel, ev.p1); break; // pitchBend
-                    case 3: noteOn(ev.channel, ev.p1, ev.p2); break; // noteOn
+                    case 0: noteOff(ev.channel, ev.p1); break;
+                    case 1: controlChange(ev.channel, ev.p1, ev.p2); break;
+                    case 2: pitchBend(ev.channel, ev.p1); break;
+                    case 3: noteOn(ev.channel, ev.p1, ev.p2); break;
+                    case 4: {
+                        int bank = effectiveBankMSB(ev.channel, ev.p1, ev.tick, expr);
+                        m_channels[ev.channel].bank = bank;
+                        programChange(ev.channel, m_channels[ev.channel].program, bank);
+                        channelPresetKey[ev.channel] = m_channels[ev.channel].program * 256 + bank;
+                        break;
+                    }
+                    case 5: {
+                        m_channels[ev.channel].bankLSB = ev.p1;
+                        int bank = effectiveBankMSB(ev.channel, m_channels[ev.channel].bank, ev.tick, expr);
+                        m_channels[ev.channel].bank = bank;
+                        programChange(ev.channel, m_channels[ev.channel].program, bank);
+                        channelPresetKey[ev.channel] = m_channels[ev.channel].program * 256 + bank;
+                        break;
+                    }
+                    case 6: {
+                        int bank = effectiveBankMSB(ev.channel, m_channels[ev.channel].bank, ev.tick, expr);
+                        m_channels[ev.channel].bank = bank;
+                        programChange(ev.channel, ev.p1, bank);
+                        channelPresetKey[ev.channel] = ev.p1 * 256 + bank;
+                        break;
+                    }
+                    case 7:
+                        if (ev.p1 == 1) {
+                            m_channels[ev.channel].bank = 128;
+                            programChange(ev.channel, m_channels[ev.channel].program, 128);
+                            channelPresetKey[ev.channel] = m_channels[ev.channel].program * 256 + 128;
+                        } else if (ev.p1 == 0 && ev.channel == 9) {
+                            int restoredBank = 0;
+                            for (auto& [bt, bv] : expr.bankSelectMSB[ev.channel]) {
+                                if (bt <= ev.tick) restoredBank = bv;
+                            }
+                            m_channels[ev.channel].bank = restoredBank;
+                            programChange(ev.channel, m_channels[ev.channel].program, restoredBank);
+                            channelPresetKey[ev.channel] = m_channels[ev.channel].program * 256 + restoredBank;
+                        }
+                        break;
                 }
                 evIdx++;
             }
 
             segStart = segEnd;
-        }
-
-        // GS SysEx: エフェクトパラメータを適用
-        // リバーブ
-        for (auto& [t, v] : expr.sysReverbLevel) {
-            if (t >= blockTickStart && t < blockTickEnd) {
-                m_reverbLevel = v / 127.0f;
-            }
-        }
-        // コーラス
-        for (auto& [t, v] : expr.sysChorusLevel) {
-            if (t >= blockTickStart && t < blockTickEnd) {
-                m_chorusLevel = v / 127.0f;
-            }
-        }
-        // ディレイ
-        for (auto& [t, v] : expr.sysDelayLevel) {
-            if (t >= blockTickStart && t < blockTickEnd) {
-                m_delayLevel = v / 127.0f;
-            }
-        }
-        for (auto& [t, v] : expr.sysDelayTime) {
-            if (t >= blockTickStart && t < blockTickEnd) {
-                m_delayTime = v / 127.0f;
-            }
-        }
-        for (auto& [t, v] : expr.sysDelayFeed) {
-            if (t >= blockTickStart && t < blockTickEnd) {
-                m_delayFeedback = v / 127.0f;
-            }
-        }
-
-        // リバーブ適用: パート別send量の加重平均（maxではなく加算でmuddy防止）
-        float reverbSum = 0.0f;
-        int reverbCount = 0;
-        for (int ch = 0; ch < 16; ch++) {
-            if (m_channels[ch].reverb > 0) {
-                reverbSum += m_channels[ch].reverb / 127.0f;
-                reverbCount++;
-            }
-        }
-        float reverbMix = (reverbCount > 0) ? std::min(reverbSum / (float)reverbCount, 1.0f) : m_reverbLevel;
-        if (reverbMix > 0.001f) {
-            m_reverb.process(bl.data(), br.data(), blockLen, reverbMix * 0.6f);
-        }
-
-        // コーラス適用: 同様に加算ミックス
-        float chorusSum = 0.0f;
-        int chorusCount = 0;
-        for (int ch = 0; ch < 16; ch++) {
-            if (m_channels[ch].chorus > 0) {
-                chorusSum += m_channels[ch].chorus / 127.0f;
-                chorusCount++;
-            }
-        }
-        float chorusMix = (chorusCount > 0) ? std::min(chorusSum / (float)chorusCount, 1.0f) : m_chorusLevel;
-        if (chorusMix > 0.001f) {
-            m_chorus.process(bl.data(), br.data(), blockLen, chorusMix * 127.0f);
-        }
-
-        // ディレイ適用: 同様に加算ミックス
-        float delaySum = 0.0f;
-        int delayCount = 0;
-        for (int ch = 0; ch < 16; ch++) {
-            if (m_channels[ch].delay > 0) {
-                delaySum += m_channels[ch].delay / 127.0f;
-                delayCount++;
-            }
-        }
-        float delayMix = (delayCount > 0) ? std::min(delaySum / (float)delayCount, 1.0f) : m_delayLevel;
-        if (delayMix > 0.001f) {
-            float delayTime = 0.1f + m_delayTime * 0.9f;
-            float feedback = 0.2f + m_delayFeedback * 0.5f;
-            m_delay.process(bl.data(), br.data(), blockLen, delayTime, feedback, delayMix * 0.4f);
         }
 
         for (int i = 0; i < blockLen; i++) {
@@ -1413,9 +1421,9 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         for (auto& [t, v] : expr.programChange[ch]) if (t <= firstNoteTick) chProgram = v;
         for (auto& [t, v] : expr.bankSelectMSB[ch]) if (t <= firstNoteTick) chBank = v;
 
-        // GM規約: Ch10 (0-indexed 9) はデフォルトでドラム(bank=128)
         int partMode = expr.getValueAtTick(expr.sysPartMode[ch], firstNoteTick, -1);
-        if (ch == 9 && partMode != 0) chBank = 128;
+        chBank = effectiveBankMSB(ch, chBank, firstNoteTick, expr);
+        if (ch != 9 && partMode == 1 && chBank == 0) chBank = 128;
 
         // このチャンネルのノートのみを抽出
         std::vector<MidiNote> chNotes;
@@ -1517,44 +1525,107 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
             double blockSecEnd = (double)blockEnd / m_sampleRate;
             int64_t blockTickStart = tickForTime(blockSecStart);
             int64_t blockTickEnd = tickForTime(blockSecEnd);
-            // CC7 (Volume)
-            for (auto& [t, v] : expr.volume[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 7, v);
-            // CC11 (Expression)
-            for (auto& [t, v] : expr.expression[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 11, v);
-            // CC2 (Breath)
-            for (auto& [t, v] : expr.breath[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 2, v);
-            // CC64 (Sustain)
-            for (auto& [t, v] : expr.sustain[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 64, v);
-            // CC1 (Modulation)
-            for (auto& [t, v] : expr.modulation[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 1, v);
-            // Pitch Bend
-            for (auto& [t, v] : expr.pitchBend[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.pitchBend(0, v);
-            // CC10 (Pan)
-            for (auto& [t, v] : expr.pan[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 10, v);
-            // CC91/93/94 (Effects)
-            for (auto& [t, v] : expr.reverbDepth[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 91, v);
-            for (auto& [t, v] : expr.chorusDepth[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 93, v);
-            for (auto& [t, v] : expr.delayDepth[ch]) if (t >= blockTickStart && t < blockTickEnd) chSynth.controlChange(0, 94, v);
 
-            // ノート＋CCイベントをサンプル精度で処理（メインパスと同じセグメント分割）
+            if (ch == 9) {
+                int pm = expr.getValueAtTick(expr.sysPartMode[ch], blockTickStart, -1);
+                if (pm != 0 && chSynth.m_channels[0].bank != 128) {
+                    chSynth.m_channels[0].bank = 128;
+                    chSynth.programChange(0, chSynth.m_channels[0].program, 128);
+                }
+            }
+
+            auto tickToSampleOffset = [&](int64_t tick) -> int {
+                int s = (int)(midi.tickToSeconds(tick, 0) * m_sampleRate) - pos;
+                if (s < 0) s = 0;
+                if (s >= blockLen) s = blockLen - 1;
+                return s;
+            };
+
             struct ChEvent { int sampleOffset; int type; int p1; int p2; };
             std::vector<ChEvent> chEvents;
             for (auto& n : mapped) {
                 int noteStart = (int)(midi.tickToSeconds(n.startTime, n.track) * m_sampleRate);
                 if (noteStart >= pos && noteStart < blockEnd) {
-                    int off = std::clamp(noteStart - pos, 0, blockLen - 1);
-                    chEvents.push_back({off, 1, std::clamp(n.note + pitchShift, 0, 127), n.velocity}); // noteOn
+                    chEvents.push_back({noteStart - pos, 3, std::clamp(n.note + pitchShift, 0, 127), n.velocity});
                 }
                 int noteEnd = (int)(midi.tickToSeconds(n.endTime, n.track) * m_sampleRate);
                 if (noteEnd >= pos && noteEnd < blockEnd) {
-                    int off = std::clamp(noteEnd - pos, 0, blockLen - 1);
-                    chEvents.push_back({off, 0, std::clamp(n.note + pitchShift, 0, 127), 0}); // noteOff
+                    chEvents.push_back({noteEnd - pos, 0, std::clamp(n.note + pitchShift, 0, 127), 0});
                 }
             }
-            std::sort(chEvents.begin(), chEvents.end(), [](const ChEvent& a, const ChEvent& b) {
+            auto addCC = [&](const std::vector<std::pair<int64_t, int>>& ccVec, int ccNum) {
+                for (auto& [t, v] : ccVec) {
+                    if (t >= blockTickStart && t < blockTickEnd)
+                        chEvents.push_back({tickToSampleOffset(t), 1, ccNum, v});
+                }
+            };
+            addCC(expr.volume[ch], 7);
+            addCC(expr.expression[ch], 11);
+            addCC(expr.breath[ch], 2);
+            addCC(expr.foot[ch], 4);
+            addCC(expr.sustain[ch], 64);
+            addCC(expr.modulation[ch], 1);
+            addCC(expr.pan[ch], 10);
+            addCC(expr.portamentoTime[ch], 5);
+            addCC(expr.portamentoOn[ch], 65);
+            addCC(expr.dataEntryMSB[ch], 6);
+            addCC(expr.dataEntryLSB[ch], 38);
+            addCC(expr.nrpnLSB[ch], 98);
+            addCC(expr.nrpnMSB[ch], 99);
+            addCC(expr.rpnLSB[ch], 100);
+            addCC(expr.rpnMSB[ch], 101);
+            addCC(expr.reverbDepth[ch], 91);
+            addCC(expr.chorusDepth[ch], 93);
+            addCC(expr.delayDepth[ch], 94);
+            for (auto& [t, v] : expr.pitchBend[ch]) {
+                if (t >= blockTickStart && t < blockTickEnd)
+                    chEvents.push_back({tickToSampleOffset(t), 2, v, 0});
+            }
+
+            auto chEventPriority = [](int type) {
+                switch (type) {
+                    case 0: return 0;
+                    case 1: return 5;
+                    case 2: return 6;
+                    case 3: return 7;
+                    default: return 8;
+                }
+            };
+            auto ccPriority = [](int cc) {
+                if (cc == 99 || cc == 98 || cc == 101 || cc == 100) return 0;
+                if (cc == 6 || cc == 38) return 1;
+                if (cc == 7) return 2;
+                if (cc == 11) return 3;
+                if (cc == 10) return 4;
+                return 5;
+            };
+            std::sort(chEvents.begin(), chEvents.end(), [&](const ChEvent& a, const ChEvent& b) {
                 if (a.sampleOffset != b.sampleOffset) return a.sampleOffset < b.sampleOffset;
-                return a.type < b.type;
+                int pa = chEventPriority(a.type), pb = chEventPriority(b.type);
+                if (pa != pb) return pa < pb;
+                if (a.type == 1 && b.type == 1) return ccPriority(a.p1) < ccPriority(b.p1);
+                return false;
             });
+
+            auto applyChFx = [&](float* segL, float* segR, int len, int segEndSample) {
+                int64_t segTick = tickForTime((double)(pos + segEndSample) / m_sampleRate);
+                int sendRev = chSynth.m_channels[0].reverb;
+                sendRev = std::max(sendRev, expr.getValueAtTick(expr.sysPartReverbSend[ch], segTick, 0));
+                float chRev = sendRev / 127.0f;
+                int sendChr = chSynth.m_channels[0].chorus;
+                sendChr = std::max(sendChr, expr.getValueAtTick(expr.sysPartChorusSend[ch], segTick, 0));
+                float chChr = sendChr / 127.0f;
+                int sendDly = chSynth.m_channels[0].delay;
+                sendDly = std::max(sendDly, expr.getValueAtTick(expr.sysPartDelaySend[ch], segTick, 0));
+                float chDly = sendDly / 127.0f;
+                if (chRev > 0.001f) chSynth.m_reverb.process(segL, segR, len, chRev * 0.6f);
+                if (chChr > 0.001f) chSynth.m_chorus.process(segL, segR, len, chChr * 127.0f);
+                if (chDly > 0.001f) {
+                    float dlyTime = 0.1f + chSynth.m_delayTime * 0.9f;
+                    float feedback = 0.2f + chSynth.m_delayFeedback * 0.5f;
+                    chSynth.m_delay.process(segL, segR, len, dlyTime, feedback, chDly * 0.4f);
+                }
+            };
 
             std::vector<float> bl(blockLen, 0.0f), br(blockLen, 0.0f);
             int segStart = 0;
@@ -1566,29 +1637,23 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
                     std::vector<float> segL(segEnd - segStart, 0.0f);
                     std::vector<float> segR(segEnd - segStart, 0.0f);
                     chSynth.processBlock(segL, segR, segEnd - segStart);
+                    applyChFx(segL.data(), segR.data(), segEnd - segStart, segEnd);
                     for (int i = 0; i < segEnd - segStart; i++) {
                         bl[segStart + i] = segL[i];
                         br[segStart + i] = segR[i];
                     }
                 }
                 while (evIdx < (int)chEvents.size() && chEvents[evIdx].sampleOffset == segEnd) {
-                    if (chEvents[evIdx].type == 0) chSynth.noteOff(0, chEvents[evIdx].p1);
-                    else chSynth.noteOn(0, chEvents[evIdx].p1, chEvents[evIdx].p2);
+                    auto& ev = chEvents[evIdx];
+                    switch (ev.type) {
+                        case 0: chSynth.noteOff(0, ev.p1); break;
+                        case 1: chSynth.controlChange(0, ev.p1, ev.p2); break;
+                        case 2: chSynth.pitchBend(0, ev.p1); break;
+                        case 3: chSynth.noteOn(0, ev.p1, ev.p2); break;
+                    }
                     evIdx++;
                 }
                 segStart = segEnd;
-            }
-
-            // FX適用: Per-channel send量に応じたreverb/chorus/delay
-            float chRev = chSynth.m_channels[0].reverb / 127.0f;
-            float chChr = chSynth.m_channels[0].chorus / 127.0f;
-            float chDly = chSynth.m_channels[0].delay / 127.0f;
-            if (chRev > 0.001f) chSynth.m_reverb.process(bl.data(), br.data(), blockLen, chRev * 0.6f);
-            if (chChr > 0.001f) chSynth.m_chorus.process(bl.data(), br.data(), blockLen, chChr * 127.0f);
-            if (chDly > 0.001f) {
-                float dlyTime = 0.1f + chSynth.m_delayTime * 0.9f;
-                float feedback = 0.2f + chSynth.m_delayFeedback * 0.5f;
-                chSynth.m_delay.process(bl.data(), br.data(), blockLen, dlyTime, feedback, chDly * 0.4f);
             }
 
             for (int i = 0; i < blockLen; i++) {

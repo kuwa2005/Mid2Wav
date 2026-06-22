@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 
 bool MidiFile::load(const std::string& path) {
@@ -32,30 +33,110 @@ bool MidiFile::load(const std::string& path) {
     m_expression.sort();
 
     extractNotes();
+    buildTickToTime();
     return true;
 }
 
 double MidiFile::tickToSeconds(int64_t tick) const {
-    return tickToSeconds(tick, -1);
+    if (m_tickToTime.empty()) {
+        // Fallback: direct computation if buildTickToTime not called
+        return tickToSeconds(tick, -1);
+    }
+    if (tick < 0) return 0.0;
+    if (tick >= (int64_t)m_tickToTime.size()) {
+        // Extrapolate from last entry
+        double lastTime = m_tickToTime.empty() ? 0.0 : m_tickToTime.back();
+        double lastTick = (double)m_tickToTime.size() - 1;
+        return lastTime + (double)(tick - (int64_t)lastTick) / m_ticksPerQuarter * (60.0 / initialTempo());
+    }
+    return m_tickToTime[tick];
 }
 
 double MidiFile::tickToSeconds(int64_t tick, int track) const {
-    const auto& tmap = (track >= 0 && track < (int)m_trackTempoMaps.size() && m_formatType == 2)
-                        ? m_trackTempoMaps[track] : m_tempoMap;
-    if (tmap.empty()) return (double)tick / m_ticksPerQuarter * (60.0 / 120.0);
-
-    double seconds = 0;
-    int64_t prevTick = 0;
-    double prevBPM = tmap[0].second;
-
-    for (const auto& [tempoTick, bpm] : tmap) {
-        if (tempoTick >= tick) break;
-        seconds += (double)(tempoTick - prevTick) / m_ticksPerQuarter * (60.0 / prevBPM);
-        prevTick = tempoTick;
-        prevBPM = bpm;
+    // Format 2: use track-specific tempo map if available
+    if (track >= 0 && track < (int)m_trackTempoMaps.size() && m_formatType == 2) {
+        const auto& tmap = m_trackTempoMaps[track];
+        if (tmap.empty()) return (double)tick / m_ticksPerQuarter * (60.0 / 120.0);
+        double seconds = 0;
+        int64_t prevTick = 0;
+        double prevBPM = tmap[0].second;
+        for (const auto& [tempoTick, bpm] : tmap) {
+            if (tempoTick >= tick) break;
+            seconds += (double)(tempoTick - prevTick) / m_ticksPerQuarter * (60.0 / prevBPM);
+            prevTick = tempoTick;
+            prevBPM = bpm;
+        }
+        seconds += (double)(tick - prevTick) / m_ticksPerQuarter * (60.0 / prevBPM);
+        return seconds;
     }
-    seconds += (double)(tick - prevTick) / m_ticksPerQuarter * (60.0 / prevBPM);
-    return seconds;
+    return tickToSeconds(tick);
+}
+
+void MidiFile::buildTickToTime() {
+    if (m_tempoMap.empty()) {
+        // No tempo changes: linear mapping
+        // Find max tick
+        m_maxTick = 0;
+        for (auto& n : m_notes) {
+            m_maxTick = std::max(m_maxTick, std::max(n.startTime, n.endTime));
+        }
+        double scale = 60.0 / (initialTempo() * m_ticksPerQuarter);
+        m_tickToTime.resize(m_maxTick + 1);
+        for (int64_t t = 0; t <= m_maxTick; t++) {
+            m_tickToTime[t] = (double)t * scale;
+        }
+        return;
+    }
+
+    // Find max tick
+    m_maxTick = 0;
+    for (auto& n : m_notes) {
+        m_maxTick = std::max(m_maxTick, std::max(n.startTime, n.endTime));
+    }
+    for (auto& [t, bpm] : m_tempoMap) {
+        m_maxTick = std::max(m_maxTick, t);
+    }
+
+    // Build tick→time array (pretty-midi style)
+    int64_t maxScaleTick = m_tempoMap.back().first;
+    int64_t allocMax = std::max(m_maxTick, maxScaleTick);
+    m_tickToTime.resize(allocMax + 1);
+
+    double lastEndTime = 0.0;
+    int64_t prevTick = 0;
+    double prevBPM = m_tempoMap[0].second;
+
+    for (size_t i = 0; i < m_tempoMap.size(); i++) {
+        int64_t segEnd = m_tempoMap[i].first;
+        double tickScale = 60.0 / (prevBPM * m_ticksPerQuarter);
+
+        for (int64_t t = prevTick; t < segEnd && t <= allocMax; t++) {
+            m_tickToTime[t] = lastEndTime + (double)(t - prevTick) * tickScale;
+        }
+        lastEndTime += (double)(segEnd - prevTick) * tickScale;
+        prevTick = segEnd;
+        prevBPM = m_tempoMap[i].second;
+    }
+
+    // Final segment
+    double tickScale = 60.0 / (prevBPM * m_ticksPerQuarter);
+    for (int64_t t = prevTick; t <= allocMax; t++) {
+        m_tickToTime[t] = lastEndTime + (double)(t - prevTick) * tickScale;
+    }
+}
+
+int64_t MidiFile::timeToTick(double seconds) const {
+    if (m_tickToTime.empty()) {
+        return (int64_t)(seconds * m_ticksPerQuarter * initialTempo() / 60.0);
+    }
+    // Binary search for the tick where tickToTime[tick] >= seconds
+    int64_t lo = 0, hi = (int64_t)m_tickToTime.size() - 1;
+    while (lo < hi) {
+        int64_t mid = lo + (hi - lo) / 2;
+        if (m_tickToTime[mid] < seconds) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
 }
 
 bool MidiFile::parseHeader(const uint8_t* data, size_t& pos) {

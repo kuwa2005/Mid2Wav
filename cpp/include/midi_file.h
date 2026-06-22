@@ -218,6 +218,7 @@ public:
 
     double tickToSeconds(int64_t tick) const;
     double tickToSeconds(int64_t tick, int track) const;
+    int64_t timeToTick(double seconds) const;
 
     bool hasRolandGS() const { return m_hasRolandGS; }
     bool hasYamahaXG() const { return m_hasYamahaXG; }
@@ -240,6 +241,11 @@ private:
     std::vector<std::vector<MidiEvent>> m_trackEvents;
     std::vector<std::pair<int64_t, double>> m_tempoMap;
     std::vector<std::vector<std::pair<int64_t, double>>> m_trackTempoMaps;
+
+    // Pre-computed tick→time lookup (pretty-midi style)
+    std::vector<double> m_tickToTime; // indexed by tick: m_tickToTime[tick] = seconds
+    int64_t m_maxTick = 0;
+    void buildTickToTime();
 
     // SysEx detection flags
     bool m_hasRolandGS = false;
