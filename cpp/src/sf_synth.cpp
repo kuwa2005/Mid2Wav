@@ -1360,8 +1360,9 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             if (reverbMix > 0.001f) {
                 // For drums, use shorter reverb (lower feedback/damp) to avoid pipe resonance
                 float drumReverbMix = reverbMix * 0.6f;
-                if (hasDrumActive) drumReverbMix *= 0.5f; // Halve reverb for drums
-                m_reverb.process(segL, segR, len, drumReverbMix);
+                if (hasDrumActive) drumReverbMix *= 0.5f;
+                // Drums need full dry signal for punch — use dedicated drum reverb with less dry attenuation
+                m_reverb.process(segL, segR, len, drumReverbMix, hasDrumActive);
             }
 
             // Chorus: use weighted average of send levels (not max)

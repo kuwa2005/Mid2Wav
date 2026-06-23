@@ -25,9 +25,9 @@ public:
         if (!m_init || rateCC <= 0 || count <= 0) return;
 
         float mix = rateCC / 127.0f;
-        float lfoRate = 0.5f + mix * 1.5f;   // 0.5 - 2.0 Hz (reduced from 3.0)
-        float depth = 0.001f + mix * 0.004f;  // 1-5ms modulation (reduced from 2-10ms)
-        float wetMix = 0.1f + mix * 0.2f;     // 10-30% wet (reduced from 20-50%)
+        float lfoRate = 0.5f + mix * 1.0f;   // 0.5 - 1.5 Hz (further reduced)
+        float depth = 0.001f + mix * 0.003f;  // 1-4ms modulation
+        float wetMix = 0.05f + mix * 0.15f;   // 5-20% wet (further reduced)
 
         int bufLen = (int)m_buffer.size();
         float phaseInc = 2.0f * 3.14159265f * lfoRate / (float)m_sampleRate;

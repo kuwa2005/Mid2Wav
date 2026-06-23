@@ -94,7 +94,7 @@ public:
 
             // Wet/dry mix with stereo spread
             float wet = combOut * mix;
-            float dry = 1.0f - mix * 0.5f;
+            float dry = drumMode ? (1.0f - mix * 0.3f) : (1.0f - mix * 0.5f);
             left[i] = left[i] * dry + wet;
             right[i] = right[i] * dry + wet * 0.93f;
         }
