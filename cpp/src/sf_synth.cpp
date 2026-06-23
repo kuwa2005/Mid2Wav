@@ -585,7 +585,7 @@ void SFSynthesizer::controlChange(int channel, int cc, int value) {
             }
             break;
         case 121: // Reset All Controllers
-            ch.volume = 100; ch.expression = 127; ch.pan = 64;
+            ch.volume = 127; ch.expression = 127; ch.pan = 64;
             ch.pitchBend = 8192; ch.pitchBendRange = 2;
             ch.modulation = 0; ch.sustain = 0;
             ch.reverb = 0; ch.chorus = 0; ch.delay = 0;
@@ -659,19 +659,16 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         if (!v.active) break;
 
         // Update envelope
-        switch (1) { // unified: check releasing flag
-        default:
-            if (v.releasing) {
-                v.envLevel -= v.releaseRate;
-                if (v.envLevel <= 0.0) { v.envLevel = 0.0; v.active = false; break; }
-            } else {
-                if (v.envLevel < 1.0) {
-                    v.envLevel += v.attackRate;
-                    if (v.envLevel >= 1.0) { v.envLevel = 1.0; }
-                } else if (v.envLevel > v.sustainLevel) {
-                    v.envLevel -= v.decayRate;
-                    if (v.envLevel < v.sustainLevel) v.envLevel = v.sustainLevel;
-                }
+        if (v.releasing) {
+            v.envLevel -= v.releaseRate;
+            if (v.envLevel <= 0.0) { v.envLevel = 0.0; v.active = false; }
+        } else {
+            if (v.envLevel < 1.0) {
+                v.envLevel += v.attackRate;
+                if (v.envLevel >= 1.0) { v.envLevel = 1.0; }
+            } else if (v.envLevel > v.sustainLevel) {
+                v.envLevel -= v.decayRate;
+                if (v.envLevel < v.sustainLevel) v.envLevel = v.sustainLevel;
             }
         }
 
@@ -934,7 +931,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         programChange(ch, m_channels[ch].program, m_channels[ch].bank);
 
         // 全CCを初期状態に復元
-        m_channels[ch].volume = expr.getValueAtTick(expr.volume[ch], firstNoteTick, 100);
+        m_channels[ch].volume = expr.getValueAtTick(expr.volume[ch], firstNoteTick, 127);
         m_channels[ch].expression = expr.getValueAtTick(expr.expression[ch], firstNoteTick, 127);
         m_channels[ch].pan = expr.getValueAtTick(expr.pan[ch], firstNoteTick, 64);
         m_channels[ch].sustain = expr.getValueAtTick(expr.sustain[ch], firstNoteTick, 0);
@@ -1342,6 +1339,15 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         }
     }
 
+    // Master gain (dB)
+    if (opts.gainDb != 0.0) {
+        float gainLin = std::pow(10.0f, (float)opts.gainDb / 20.0f);
+        for (size_t i = 0; i < left.size(); i++) {
+            left[i] = std::isfinite(left[i]) ? left[i] * gainLin : 0.0f;
+            right[i] = std::isfinite(right[i]) ? right[i] * gainLin : 0.0f;
+        }
+    }
+
     WavWriter::write(wavPath, left, right, m_sampleRate);
 }
 
@@ -1452,7 +1458,7 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         chSynth.programChange(0, chProgram, chBank);
 
         // 全CCを初期状態に復元（メインパス :970-985 と同一）
-        chSynth.m_channels[0].volume = expr.getValueAtTick(expr.volume[ch], firstNoteTick, 100);
+        chSynth.m_channels[0].volume = expr.getValueAtTick(expr.volume[ch], firstNoteTick, 127);
         chSynth.m_channels[0].expression = expr.getValueAtTick(expr.expression[ch], firstNoteTick, 127);
         chSynth.m_channels[0].pan = expr.getValueAtTick(expr.pan[ch], firstNoteTick, 64);
         chSynth.m_channels[0].sustain = expr.getValueAtTick(expr.sustain[ch], firstNoteTick, 0);

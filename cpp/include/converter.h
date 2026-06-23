@@ -17,6 +17,7 @@ struct ConvertOptions {
     int pitchShift = 0;
     bool csvLog = false;
     bool noNormalize = false;
+    double gainDb = 0.0; // Master gain in dB
 };
 
 struct BatchLogEntry {

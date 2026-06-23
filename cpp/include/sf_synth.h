@@ -81,8 +81,8 @@ struct ConvertOptions;
 
 class SFSynthesizer {
 public:
-    bool init(const SoundFont& sf2, int sampleRate = 44100);
-    bool initFallback(int sampleRate = 44100);
+    bool init(const SoundFont& sf2, int sampleRate = 48000);
+    bool initFallback(int sampleRate = 48000);
 
     void renderToWav(const std::vector<MidiNote>& notes,
                      const std::string& wavPath,
@@ -149,7 +149,7 @@ private:
 
     const SoundFont* m_sf2 = nullptr;
     bool m_fallbackMode = false;
-    int m_sampleRate = 44100;
+    int m_sampleRate = 48000;
     std::vector<SF2Voice> m_voices;
     std::vector<ChannelState> m_channels;
 

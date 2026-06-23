@@ -252,9 +252,9 @@ int runConverter(const ConvertOptions& opts) {
 
             SFSynthesizer synth;
             if (sf2Loaded) {
-                synth.init(sf2, 44100);
+                synth.init(sf2, 48000);
             } else {
-                synth.initFallback(44100);
+                synth.initFallback(48000);
             }
 
             if (runOpts.channelSplit) {
