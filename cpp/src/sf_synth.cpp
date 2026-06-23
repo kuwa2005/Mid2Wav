@@ -734,16 +734,10 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         }
         if (idx < (int)v.sampleStart) { idx = (int)v.sampleStart; v.position = 0; }
 
-        // Lanczos-2 interpolation with loop-aware tap wrapping
+        // Lanczos-2 interpolation (high quality, reduced aliasing)
         const int16_t* sd = m_sf2->sampleData();
         size_t sdSize = m_sf2->sampleDataSize();
-        uint32_t loopLen = (v.loopEnd > v.loopStart) ? (v.loopEnd - v.loopStart) : 0;
         auto getSample = [&](int pos) -> double {
-            // Loop-aware clamping: taps near loopEnd wrap to loopStart
-            if (loopLen > 0 && v.loop) {
-                while (pos >= (int)v.loopEnd) pos -= (int)loopLen;
-                while (pos < (int)v.loopStart) pos += (int)loopLen;
-            }
             if (pos < (int)v.sampleStart) pos = (int)v.sampleStart;
             if (pos >= (int)v.sampleEnd) pos = (int)v.sampleEnd - 1;
             if (pos >= 0 && pos < (int)sdSize) return sd[pos] / 32768.0;
