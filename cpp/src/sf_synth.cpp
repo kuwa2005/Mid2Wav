@@ -1307,30 +1307,47 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
 
         auto applyFxSegment = [&](float* segL, float* segR, int len, int segEndSample) {
             int64_t segTick = tickForTime((double)(pos + segEndSample) / m_sampleRate);
-            float reverbSum = 0.0f;
-            int reverbCount = 0;
+            // Reverb: combine channel CC + GS send + SF2 voice sends
+            float reverbMix = m_reverbLevel;
             for (int ch = 0; ch < 16; ch++) {
                 int send = m_channels[ch].reverb;
                 send = std::max(send, expr.getValueAtTick(expr.sysPartReverbSend[ch], segTick, 0));
-                if (send > 0) {
-                    reverbSum += send / 127.0f;
-                    reverbCount++;
+                if (send > reverbMix * 127.0f) reverbMix = send / 127.0f;
+            }
+            // Add SF2 reverb send from active voices (averaged)
+            float sf2ReverbSum = 0.0f;
+            int sf2ReverbCount = 0;
+            for (auto& v : m_voices) {
+                if (v.active && v.reverbSend > 0.0f) {
+                    sf2ReverbSum += v.reverbSend / 100.0f;
+                    sf2ReverbCount++;
                 }
             }
-            float reverbMix = (reverbCount > 0) ? std::min(reverbSum / (float)reverbCount, 1.0f) : m_reverbLevel;
+            if (sf2ReverbCount > 0) {
+                float sf2Reverb = std::min(sf2ReverbSum / (float)sf2ReverbCount, 1.0f);
+                reverbMix = std::max(reverbMix, sf2Reverb * 0.5f);
+            }
             if (reverbMix > 0.001f) m_reverb.process(segL, segR, len, reverbMix * 0.6f);
 
-            float chorusSum = 0.0f;
-            int chorusCount = 0;
+            // Chorus: combine channel CC + GS send + SF2 voice sends
+            float chorusMix = m_chorusLevel;
             for (int ch = 0; ch < 16; ch++) {
                 int send = m_channels[ch].chorus;
                 send = std::max(send, expr.getValueAtTick(expr.sysPartChorusSend[ch], segTick, 0));
-                if (send > 0) {
-                    chorusSum += send / 127.0f;
-                    chorusCount++;
+                if (send > chorusMix * 127.0f) chorusMix = send / 127.0f;
+            }
+            float sf2ChorusSum = 0.0f;
+            int sf2ChorusCount = 0;
+            for (auto& v : m_voices) {
+                if (v.active && v.chorusSend > 0.0f) {
+                    sf2ChorusSum += v.chorusSend / 100.0f;
+                    sf2ChorusCount++;
                 }
             }
-            float chorusMix = (chorusCount > 0) ? std::min(chorusSum / (float)chorusCount, 1.0f) : m_chorusLevel;
+            if (sf2ChorusCount > 0) {
+                float sf2Chorus = std::min(sf2ChorusSum / (float)sf2ChorusCount, 1.0f);
+                chorusMix = std::max(chorusMix, sf2Chorus * 0.5f);
+            }
             if (chorusMix > 0.001f) m_chorus.process(segL, segR, len, chorusMix * 127.0f);
 
             float delaySum = 0.0f;
