@@ -152,6 +152,8 @@ void SFSynthesizer::buildPresetZones(int channel) {
             // SF2 generators 15/16: reverb/chorus send (centibels, 0=none, 1000=max)
             case 15: st.zone.reverbSend = a / 10.0; break; // convert centibels to dB
             case 16: st.zone.chorusSend = a / 10.0; break;
+            // SF2 generator 31: keynum to filter Fc (cents per key above 60)
+            case 31: st.zone.keynumToFilterFc = a / 100.0; break;
             default: break;
         }
     };
@@ -385,6 +387,14 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     double attenLin = attenuateDb(zone.attenuation);
     v.amplitude = velAmp * attenLin;
 
+    // SF2 default modulator: velocity to filter cutoff (0-24 semitones range)
+    // Higher velocity = brighter tone (filter opens more)
+    if (v.filterActive && velocity > 0) {
+        double velToFilter = (velocity / 127.0) * 24.0; // 0-24 semitones
+        v.filterFc = zone.filterFc * std::pow(2.0, velToFilter / 12.0);
+        v.filterFc = std::clamp(v.filterFc, 20.0, m_sampleRate * 0.45);
+    }
+
     double chPan = (m_channels[channel].pan - 64) / 64.0;
     v.zonePan = std::clamp(zone.pan, -1.0, 1.0);
     v.pan = std::clamp(v.zonePan + chPan, -1.0, 1.0);
@@ -409,6 +419,18 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     v.scaleTuning = zone.scaleTuning;
 
     v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
+    // SF2 default modulator: keynum to filter Fc
+    if (zone.keynumToFilterFc != 0.0 && v.filterActive) {
+        double keynumShift = zone.keynumToFilterFc * (note - 60);
+        v.filterFc *= std::pow(2.0, keynumShift / 1200.0);
+        v.filterFc = std::clamp(v.filterFc, 20.0, m_sampleRate * 0.45);
+    }
+    // SF2 default modulator: velocity to filter Fc
+    if (v.filterActive && velocity > 0) {
+        double velShift = (velocity / 127.0) * 24.0; // up to 24 semitones
+        v.filterFc *= std::pow(2.0, velShift / 12.0);
+        v.filterFc = std::clamp(v.filterFc, 20.0, m_sampleRate * 0.45);
+    }
     v.filterQ = std::max(0.5, zone.filterQ);
     v.filterActive = zone.filterActive;
     std::fill(v.filterState, v.filterState + 4, 0.0);

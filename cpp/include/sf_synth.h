@@ -133,6 +133,8 @@ private:
         double scaleTuning = 1.0;
         double reverbSend = 0.0;  // SF2 gen 15: reverbEffectsSend (0-1000, centibels)
         double chorusSend = 0.0;  // SF2 gen 16: chorusEffectsSend (0-1000, centibels)
+        double keynumToFilterFc = 0.0; // SF2 gen 31: cents per key above 60
+        double velToFilter = 0.0; // velocity to filter mapping depth
         double filterFc = 13500.0;
         double filterQ = 0.7;
         bool filterActive = false; // true if SF2 gen 43 explicitly set
