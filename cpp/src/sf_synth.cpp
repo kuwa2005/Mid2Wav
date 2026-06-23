@@ -453,7 +453,10 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     v.filterActive = zone.filterActive;
     std::fill(v.filterState, v.filterState + 4, 0.0);
 
-    v.vibratoDepth = m_channels[channel].modulation / 127.0 * 2.0;
+    // CC1 modulation → vibrato depth (SF2 spec: 0-1 semitones typical, not 2)
+    // Reduced from 2.0 to 0.5 to match typical SF2 default modulator behavior
+    // where CC1 maps to vibLFO-to-pitch with moderate depth
+    v.vibratoDepth = m_channels[channel].modulation / 127.0 * 0.5;
     v.rootKey = zone.rootKey;
     v.basePitchRatio = v.pitchRatio;
 
@@ -1346,13 +1349,26 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             }
             if (reverbMix > 0.001f) m_reverb.process(segL, segR, len, reverbMix * 0.6f);
 
-            // Chorus: combine channel CC + GS send + SF2 voice sends
-            float chorusMix = m_chorusLevel;
+            // Chorus: use weighted average of send levels (not max)
+            // This prevents one loud chorus send from modulating all instruments
+            float chorusSum = 0.0f;
+            float chorusWeight = 0.0f;
             for (int ch = 0; ch < 16; ch++) {
-                int send = m_channels[ch].chorus;
-                send = std::max(send, expr.getValueAtTick(expr.sysPartChorusSend[ch], segTick, 0));
-                if (send > chorusMix * 127.0f) chorusMix = send / 127.0f;
+                float send = std::max((float)m_channels[ch].chorus,
+                    (float)expr.getValueAtTick(expr.sysPartChorusSend[ch], segTick, 0)) / 127.0f;
+                if (send > 0.001f) {
+                    // Weight by how many active notes on this channel
+                    int noteCount = 0;
+                    for (auto& v : m_voices) {
+                        if (v.active && v.channel == ch) noteCount++;
+                    }
+                    float weight = std::min((float)noteCount, 4.0f) / 4.0f;
+                    chorusSum += send * weight;
+                    chorusWeight += weight;
+                }
             }
+            float chorusMix = (chorusWeight > 0.0f) ? chorusSum / chorusWeight : 0.0f;
+            // Also factor in SF2 voice sends
             float sf2ChorusSum = 0.0f;
             int sf2ChorusCount = 0;
             for (auto& v : m_voices) {
@@ -1363,7 +1379,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             }
             if (sf2ChorusCount > 0) {
                 float sf2Chorus = std::min(sf2ChorusSum / (float)sf2ChorusCount, 1.0f);
-                chorusMix = std::max(chorusMix, sf2Chorus * 0.5f);
+                chorusMix = std::max(chorusMix, sf2Chorus * 0.3f); // SF2 sends at 30% to avoid over-wetting
             }
             if (chorusMix > 0.001f) m_chorus.process(segL, segR, len, chorusMix * 127.0f);
 
