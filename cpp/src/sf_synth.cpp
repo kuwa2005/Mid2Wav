@@ -158,6 +158,11 @@ void SFSynthesizer::buildPresetZones(int channel) {
             case 32: st.zone.modEnvToFilterFc = a; break;
             // SF2 generator 33: modEnv to volume (centibels)
             case 33: st.zone.modEnvToVolume = a; break;
+            // SF2 generators 39-42: ModEnv ADSR
+            case 39: st.zone.modEnvAttack = timecentsToSeconds(a); break;
+            case 40: st.zone.modEnvDecay = timecentsToSeconds(a); break;
+            // case 41: keynumToVolEnvDecay (not modEnv - handled separately)
+            case 42: st.zone.modEnvSustain = attenuateDb(a / 10.0); break;
             default: break;
         }
     };
@@ -460,13 +465,16 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     v.modEnvLevel = 0.0;
     v.modEnvToFilterFc = zone.modEnvToFilterFc;
     v.modEnvToVolume = zone.modEnvToVolume;
-    // ModEnv timing: use VolEnv timing as approximation if not explicitly set
-    v.modEnvAttackRate = 1.0 / (std::max(zone.attack, 0.001) * m_sampleRate);
-    v.modEnvDecayRate = (1.0 - zone.sustain) / (std::max(zone.decay, 0.001) * m_sampleRate);
-    v.modEnvSustainLevel = zone.sustain;
-    v.modEnvReleaseRate = 1.0 / (std::max(zone.release, 0.001) * m_sampleRate);
+    // Use SF2 gen 39-42 values if set, otherwise fallback to VolEnv timing
+    double mAttack = std::max(zone.modEnvAttack, 0.001);
+    double mDecay = std::max(zone.modEnvDecay, 0.001);
+    double mRelease = std::max(zone.modEnvRelease, 0.001);
+    v.modEnvAttackRate = 1.0 / (mAttack * m_sampleRate);
+    v.modEnvDecayRate = (1.0 - zone.modEnvSustain) / (mDecay * m_sampleRate);
+    v.modEnvSustainLevel = zone.modEnvSustain;
+    v.modEnvReleaseRate = 1.0 / (mRelease * m_sampleRate);
     v.modEnvStage = 1; // start at attack
-    v.modEnvDelaySamples = v.envDelaySamples; // share delay with volEnv
+    v.modEnvDelaySamples = v.envDelaySamples;
     v.modEnvHoldSamples = v.envHoldSamples;
     v.modEnvDelayCount = 0;
     v.modEnvHoldCount = 0;

@@ -152,6 +152,10 @@ private:
         double velToFilter = 0.0; // velocity to filter mapping depth
         double modEnvToFilterFc = 0.0; // SF2 gen 32: modEnv to filter Fc (cents)
         double modEnvToVolume = 0.0; // SF2 gen 33: modEnv to volume (centibels)
+        double modEnvAttack = 0.0;   // SF2 gen 39
+        double modEnvDecay = 0.0;    // SF2 gen 40
+        double modEnvSustain = 1.0;  // SF2 gen 41
+        double modEnvRelease = 0.0;  // SF2 gen 42
         double filterFc = 13500.0;
         double filterQ = 0.7;
         bool filterActive = false; // true if SF2 gen 43 explicitly set
