@@ -154,6 +154,10 @@ void SFSynthesizer::buildPresetZones(int channel) {
             case 16: st.zone.chorusSend = a / 10.0; break;
             // SF2 generator 31: keynum to filter Fc (cents per key above 60)
             case 31: st.zone.keynumToFilterFc = a / 100.0; break;
+            // SF2 generator 32: modEnv to filter Fc (cents)
+            case 32: st.zone.modEnvToFilterFc = a; break;
+            // SF2 generator 33: modEnv to volume (centibels)
+            case 33: st.zone.modEnvToVolume = a; break;
             default: break;
         }
     };
@@ -443,6 +447,21 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     v.reverbSend = zone.reverbSend;
     v.chorusSend = zone.chorusSend;
 
+    // Modulation envelope (gen 39-42 for attack/decay/sustain/release)
+    v.modEnvLevel = 0.0;
+    v.modEnvToFilterFc = zone.modEnvToFilterFc;
+    v.modEnvToVolume = zone.modEnvToVolume;
+    // ModEnv timing: use VolEnv timing as approximation if not explicitly set
+    v.modEnvAttackRate = 1.0 / (std::max(zone.attack, 0.001) * m_sampleRate);
+    v.modEnvDecayRate = (1.0 - zone.sustain) / (std::max(zone.decay, 0.001) * m_sampleRate);
+    v.modEnvSustainLevel = zone.sustain;
+    v.modEnvReleaseRate = 1.0 / (std::max(zone.release, 0.001) * m_sampleRate);
+    v.modEnvStage = 1; // start at attack
+    v.modEnvDelaySamples = v.envDelaySamples; // share delay with volEnv
+    v.modEnvHoldSamples = v.envHoldSamples;
+    v.modEnvDelayCount = 0;
+    v.modEnvHoldCount = 0;
+
     if (zone.exclusiveClass > 0 && m_channels[channel].bank == 128) {
         for (auto& other : m_voices) {
             if (&other != &v && other.active && other.channel == channel &&
@@ -731,6 +750,26 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
             }
         }
 
+        // Update modulation envelope (parallel to volume envelope)
+        if (v.modEnvToFilterFc != 0.0 || v.modEnvToVolume != 0.0) {
+            if (v.releasing) {
+                v.modEnvLevel -= v.modEnvReleaseRate;
+                if (v.modEnvLevel <= 0.0) v.modEnvLevel = 0.0;
+            } else {
+                switch (v.modEnvStage) {
+                    case 0: v.modEnvDelayCount++;
+                        if (v.modEnvDelayCount >= v.modEnvDelaySamples) v.modEnvStage = 1; break;
+                    case 1: v.modEnvLevel += v.modEnvAttackRate;
+                        if (v.modEnvLevel >= 1.0) { v.modEnvLevel = 1.0; v.modEnvStage = 2; } break;
+                    case 2: v.modEnvHoldCount++;
+                        if (v.modEnvHoldCount >= v.modEnvHoldSamples) v.modEnvStage = 3; break;
+                    case 3: v.modEnvLevel -= v.modEnvDecayRate;
+                        if (v.modEnvLevel <= v.modEnvSustainLevel) { v.modEnvLevel = v.modEnvSustainLevel; v.modEnvStage = 4; } break;
+                    case 4: break;
+                }
+            }
+        }
+
         if (!v.active) break;
 
         // Sample position
@@ -796,6 +835,10 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         if (v.vibratoDepth > 0.0 && !isDrumChannel) {
             modulatedFc *= std::pow(2.0, lfoValue * v.vibratoDepth * 0.5 / 12.0);
         }
+        // ModEnv to filter Fc (gen 32)
+        if (v.modEnvToFilterFc != 0.0) {
+            modulatedFc *= std::pow(2.0, v.modEnvLevel * v.modEnvToFilterFc / 1200.0);
+        }
         modulatedFc = std::clamp(modulatedFc, 20.0, m_sampleRate * 0.45);
         // Skip filter if SF2 didn't explicitly set filterFc (default 13500 = no filter)
         if (modulatedFc < m_sampleRate * 0.45 && v.filterActive) {
@@ -815,8 +858,12 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
             sample = y;
         }
 
-        // Amplitude with LFO modulation (tremolo)
+        // Amplitude with LFO modulation (tremolo) + ModEnv to volume
         double envAmp = v.envLevel * v.amplitude;
+        // ModEnv to volume (gen 33: centibels, 0=none, 960=max attenuation)
+        if (v.modEnvToVolume != 0.0) {
+            envAmp *= attenuateDb(v.modEnvLevel * v.modEnvToVolume);
+        }
         double chVol = m_channels[v.channel].volume / 127.0;
         double chExpr = m_channels[v.channel].expression / 127.0;
         double breathAmp = m_channels[v.channel].breath > 0 ? (0.5 + 0.5 * m_channels[v.channel].breath / 127.0) : 1.0;

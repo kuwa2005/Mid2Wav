@@ -54,6 +54,19 @@ struct SF2Voice {
     double vibratoPhase = 0.0;
     double reverbSend = 0.0;  // SF2 reverb send per voice
     double chorusSend = 0.0;  // SF2 chorus send per voice
+    // Modulation envelope (separate from volume envelope)
+    double modEnvLevel = 0.0;
+    double modEnvAttackRate = 0.0;
+    double modEnvDecayRate = 0.0;
+    double modEnvSustainLevel = 1.0;
+    double modEnvReleaseRate = 0.0;
+    int modEnvStage = 0; // 0=delay, 1=attack, 2=hold, 3=decay, 4=sustain, 5=release
+    int modEnvDelaySamples = 0;
+    int modEnvHoldSamples = 0;
+    int modEnvDelayCount = 0;
+    int modEnvHoldCount = 0;
+    double modEnvToFilterFc = 0.0;
+    double modEnvToVolume = 0.0;
 };
 
 struct ChannelState {
@@ -137,6 +150,8 @@ private:
         double chorusSend = 0.0;  // SF2 gen 16: chorusEffectsSend (0-1000, centibels)
         double keynumToFilterFc = 0.0; // SF2 gen 31: cents per key above 60
         double velToFilter = 0.0; // velocity to filter mapping depth
+        double modEnvToFilterFc = 0.0; // SF2 gen 32: modEnv to filter Fc (cents)
+        double modEnvToVolume = 0.0; // SF2 gen 33: modEnv to volume (centibels)
         double filterFc = 13500.0;
         double filterQ = 0.7;
         bool filterActive = false; // true if SF2 gen 43 explicitly set
