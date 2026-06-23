@@ -40,16 +40,18 @@ public:
     }
 
     // mix: 0.0 = dry, 1.0 = full wet
-    void process(float* left, float* right, int count, float mix) {
+    // drumMode: true = shorter reverb for percussion (less feedback/damp)
+    void process(float* left, float* right, int count, float mix, bool drumMode = false) {
         if (!m_init || mix < 0.001f || count <= 0) return;
 
         // Clamp mix
         mix = std::min(mix, 1.0f);
 
         // Reverb parameters (Dattorro-inspired)
-        float combFeedback = 0.84f - mix * 0.12f;  // More wet = slightly less feedback
-        float dampAmount = 0.3f + mix * 0.4f;
-        float allpassFeedback = 0.5f;
+        // Reduced feedback range to prevent excessive resonance on percussion
+        float combFeedback = drumMode ? 0.55f : (0.70f - mix * 0.10f);
+        float dampAmount = drumMode ? 0.55f : (0.35f + mix * 0.35f);
+        float allpassFeedback = drumMode ? 0.25f : 0.45f;
 
         for (int i = 0; i < count; i++) {
             float input = (left[i] + right[i]) * 0.25f;

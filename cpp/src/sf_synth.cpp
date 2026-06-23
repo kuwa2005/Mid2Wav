@@ -1327,11 +1327,21 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
 
         auto applyFxSegment = [&](float* segL, float* segR, int len, int segEndSample) {
             int64_t segTick = tickForTime((double)(pos + segEndSample) / m_sampleRate);
+
+            // Check if any drum voices are active
+            bool hasDrumActive = false;
+            for (auto& v : m_voices) {
+                if (v.active && m_channels[v.channel].bank == 128) { hasDrumActive = true; break; }
+            }
+
             // Reverb: combine channel CC + GS send + SF2 voice sends
+            // Cap drum reverb to prevent 'pipe' sound on percussion
             float reverbMix = m_reverbLevel;
             for (int ch = 0; ch < 16; ch++) {
                 int send = m_channels[ch].reverb;
                 send = std::max(send, expr.getValueAtTick(expr.sysPartReverbSend[ch], segTick, 0));
+                // Drums (bank==128): cap reverb to prevent excessive resonance
+                if (m_channels[ch].bank == 128) send = std::min(send, 64);
                 if (send > reverbMix * 127.0f) reverbMix = send / 127.0f;
             }
             // Add SF2 reverb send from active voices (averaged)
@@ -1347,7 +1357,12 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 float sf2Reverb = std::min(sf2ReverbSum / (float)sf2ReverbCount, 1.0f);
                 reverbMix = std::max(reverbMix, sf2Reverb * 0.5f);
             }
-            if (reverbMix > 0.001f) m_reverb.process(segL, segR, len, reverbMix * 0.6f);
+            if (reverbMix > 0.001f) {
+                // For drums, use shorter reverb (lower feedback/damp) to avoid pipe resonance
+                float drumReverbMix = reverbMix * 0.6f;
+                if (hasDrumActive) drumReverbMix *= 0.5f; // Halve reverb for drums
+                m_reverb.process(segL, segR, len, drumReverbMix);
+            }
 
             // Chorus: use weighted average of send levels (not max)
             // This prevents one loud chorus send from modulating all instruments
