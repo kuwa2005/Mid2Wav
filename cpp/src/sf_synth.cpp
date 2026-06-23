@@ -439,6 +439,10 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     v.rootKey = zone.rootKey;
     v.basePitchRatio = v.pitchRatio;
 
+    // SF2 reverb/chorus send (per-voice, from preset generators)
+    v.reverbSend = zone.reverbSend;
+    v.chorusSend = zone.chorusSend;
+
     if (zone.exclusiveClass > 0 && m_channels[channel].bank == 128) {
         for (auto& other : m_voices) {
             if (&other != &v && other.active && other.channel == channel &&

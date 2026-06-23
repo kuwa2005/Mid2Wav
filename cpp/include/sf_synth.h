@@ -52,6 +52,8 @@ struct SF2Voice {
     double zonePan = 0.0;        // SF2 zone pan (set at noteOn, preserved)
     double portamentoProgress = 1.0; // 0.0=old pitch, 1.0=new pitch
     double vibratoPhase = 0.0;
+    double reverbSend = 0.0;  // SF2 reverb send per voice
+    double chorusSend = 0.0;  // SF2 chorus send per voice
 };
 
 struct ChannelState {
