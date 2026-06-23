@@ -529,6 +529,15 @@ void SFSynthesizer::noteOn(int channel, int note, int velocity) {
     }
 
     if (!zones.empty()) {
+        // Kill previous voices on same channel+note to prevent overlap/beating
+        for (auto& v : m_voices) {
+            if (v.active && v.channel == channel && v.note == note && !v.releasing) {
+                v.releasing = true;
+                v.releaseLevel = v.envLevel;
+                v.releaseRate = 1.0 / (0.01 * m_sampleRate); // 10ms quick release
+            }
+        }
+
         // Find previous voice on this channel for portamento
         double prevPitchRatio = -1.0;
         for (auto& v : m_voices) {
