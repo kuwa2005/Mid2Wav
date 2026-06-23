@@ -1341,7 +1341,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 int send = m_channels[ch].reverb;
                 send = std::max(send, expr.getValueAtTick(expr.sysPartReverbSend[ch], segTick, 0));
                 // Drums (bank==128): cap reverb to prevent excessive resonance
-                if (m_channels[ch].bank == 128) send = std::min(send, 64);
+                if (m_channels[ch].bank == 128) send = std::min(send, 80);
                 if (send > reverbMix * 127.0f) reverbMix = send / 127.0f;
             }
             // Add SF2 reverb send from active voices (averaged)

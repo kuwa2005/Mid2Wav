@@ -48,10 +48,10 @@ public:
         mix = std::min(mix, 1.0f);
 
         // Reverb parameters (Dattorro-inspired)
-        // Reduced feedback range to prevent excessive resonance on percussion
-        float combFeedback = drumMode ? 0.55f : (0.70f - mix * 0.10f);
-        float dampAmount = drumMode ? 0.55f : (0.35f + mix * 0.35f);
-        float allpassFeedback = drumMode ? 0.25f : 0.45f;
+        // Drum mode: very short reverb to avoid long resonance on timpani/percussion
+        float combFeedback = drumMode ? 0.40f : (0.70f - mix * 0.10f);
+        float dampAmount = drumMode ? 0.65f : (0.35f + mix * 0.35f);
+        float allpassFeedback = drumMode ? 0.15f : 0.45f;
 
         for (int i = 0; i < count; i++) {
             float input = (left[i] + right[i]) * 0.25f;
