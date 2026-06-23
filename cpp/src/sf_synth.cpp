@@ -774,14 +774,22 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
                 if (v.modEnvLevel <= 0.0) v.modEnvLevel = 0.0;
             } else {
                 switch (v.modEnvStage) {
-                    case 0: v.modEnvDelayCount++;
-                        if (v.modEnvDelayCount >= v.modEnvDelaySamples) v.modEnvStage = 1; break;
-                    case 1: v.modEnvLevel += v.modEnvAttackRate;
-                        if (v.modEnvLevel >= 1.0) { v.modEnvLevel = 1.0; v.modEnvStage = 2; } break;
-                    case 2: v.modEnvHoldCount++;
-                        if (v.modEnvHoldCount >= v.modEnvHoldSamples) v.modEnvStage = 3; break;
-                    case 3: v.modEnvLevel -= v.modEnvDecayRate;
-                        if (v.modEnvLevel <= v.modEnvSustainLevel) { v.modEnvLevel = v.modEnvSustainLevel; v.modEnvStage = 4; } break;
+                    case 0:
+                        v.modEnvDelayCount++;
+                        if (v.modEnvDelayCount >= v.modEnvDelaySamples) v.modEnvStage = 1;
+                        break;
+                    case 1:
+                        v.modEnvLevel += v.modEnvAttackRate;
+                        if (v.modEnvLevel >= 1.0) { v.modEnvLevel = 1.0; v.modEnvStage = 2; }
+                        break;
+                    case 2:
+                        v.modEnvHoldCount++;
+                        if (v.modEnvHoldCount >= v.modEnvHoldSamples) v.modEnvStage = 3;
+                        break;
+                    case 3:
+                        v.modEnvLevel -= v.modEnvDecayRate;
+                        if (v.modEnvLevel <= v.modEnvSustainLevel) { v.modEnvLevel = v.modEnvSustainLevel; v.modEnvStage = 4; }
+                        break;
                     case 4: break;
                 }
             }
