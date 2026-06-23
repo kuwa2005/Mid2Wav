@@ -90,9 +90,6 @@ bool SoundFont::parseINFO(const uint8_t* data, size_t size) {
 
 bool SoundFont::parseSDTA(const uint8_t* data, size_t size) {
     size_t pos = 0;
-    const uint8_t* sm24Data = nullptr;
-    size_t sm24Size = 0;
-
     while (pos + 8 <= size) {
         char chunkId[5] = {};
         memcpy(chunkId, data + pos, 4);
@@ -105,22 +102,11 @@ bool SoundFont::parseSDTA(const uint8_t* data, size_t size) {
             size_t sampleCount = chunkSize / sizeof(int16_t);
             m_sampleData.resize(sampleCount);
             memcpy(m_sampleData.data(), data + pos, chunkSize);
-        } else if (memcmp(chunkId, "sm24", 4) == 0) {
-            sm24Data = data + pos;
-            sm24Size = chunkSize;
         }
 
         pos += chunkSize;
         if (chunkSize % 2 != 0) pos++;
     }
-
-    // Merge sm24 24-bit extension into 16-bit smpl data
-    if (sm24Data && sm24Size >= m_sampleData.size()) {
-        for (size_t i = 0; i < m_sampleData.size(); i++) {
-            m_sampleData[i] = (m_sampleData[i] << 8) | sm24Data[i];
-        }
-    }
-
     return true;
 }
 
