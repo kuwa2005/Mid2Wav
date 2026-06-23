@@ -217,6 +217,15 @@ void SFSynthesizer::buildPresetZones(int channel) {
         if (b.zone.exclusiveClass != 0) r.zone.exclusiveClass = b.zone.exclusiveClass;
         if (b.hasInstrument) { r.instIdx = b.instIdx; r.hasInstrument = true; }
         if (b.hasSample) r.hasSample = true;
+        // SF2 fields that need merge (not copied by default since GenState defaults to 0)
+        if (b.delayVolEnv > 0.0) r.delayVolEnv = b.delayVolEnv;
+        if (b.holdVolEnv > 0.0) r.holdVolEnv = b.holdVolEnv;
+        if (b.zone.scaleTuning != 1.0) r.zone.scaleTuning = b.zone.scaleTuning;
+        if (b.zone.reverbSend != 0.0) r.zone.reverbSend = b.zone.reverbSend;
+        if (b.zone.chorusSend != 0.0) r.zone.chorusSend = b.zone.chorusSend;
+        if (b.zone.keynumToFilterFc != 0.0) r.zone.keynumToFilterFc = b.zone.keynumToFilterFc;
+        if (b.zone.modEnvToFilterFc != 0.0) r.zone.modEnvToFilterFc = b.zone.modEnvToFilterFc;
+        if (b.zone.modEnvToVolume != 0.0) r.zone.modEnvToVolume = b.zone.modEnvToVolume;
         r.startOffset += b.startOffset;
         r.endOffset += b.endOffset;
         r.startLoopOffset += b.startLoopOffset;
@@ -373,6 +382,9 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     v.exclusiveClass = zone.exclusiveClass;
     v.sampleRate = zone.sampleRate;
 
+    // Set scaleTuning BEFORE pitch calculation (was set after, causing default 1.0 to be used)
+    v.scaleTuning = zone.scaleTuning;
+
     double noteFreq = 440.0 * std::pow(2.0, (note - 69) / 12.0);
     double rootFreq = 440.0 * std::pow(2.0, (zone.rootKey - 69) / 12.0);
     double pitchBend = getEffectivePitchBend(channel);
@@ -418,9 +430,6 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     v.envDelayCount = 0;
     v.envHoldCount = 0;
     v.envStage = (v.envDelaySamples > 0) ? 0 : 1; // start at delay or attack
-
-    // Scale tuning (cents per key, default 100 = equal temperament)
-    v.scaleTuning = zone.scaleTuning;
 
     v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
     // SF2 default modulator: keynum to filter Fc
@@ -830,11 +839,8 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
                    + s2 * lanczos(x - 1.0) + s3 * lanczos(x - 2.0);
         }
 
-        // Biquad low-pass filter with modulation
+        // Biquad low-pass filter
         double modulatedFc = v.filterFc;
-        if (v.vibratoDepth > 0.0 && !isDrumChannel) {
-            modulatedFc *= std::pow(2.0, lfoValue * v.vibratoDepth * 0.5 / 12.0);
-        }
         // ModEnv to filter Fc (gen 32)
         if (v.modEnvToFilterFc != 0.0) {
             modulatedFc *= std::pow(2.0, v.modEnvLevel * v.modEnvToFilterFc / 1200.0);
@@ -868,11 +874,7 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         double chExpr = m_channels[v.channel].expression / 127.0;
         double breathAmp = m_channels[v.channel].breath > 0 ? (0.5 + 0.5 * m_channels[v.channel].breath / 127.0) : 1.0;
         double footAmp = m_channels[v.channel].foot > 0 ? (0.5 + 0.5 * m_channels[v.channel].foot / 127.0) : 1.0;
-        double tremoloAmp = 1.0;
-        if (v.vibratoDepth > 0.0 && !isDrumChannel) {
-            tremoloAmp = 1.0 + lfoValue * v.vibratoDepth * 0.1;
-        }
-        double vol = envAmp * chVol * chExpr * breathAmp * footAmp * tremoloAmp;
+        double vol = envAmp * chVol * chExpr * breathAmp * footAmp;
 
         // Pan
         double panL = std::sqrt(0.5 * (1.0 - v.pan));
