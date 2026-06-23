@@ -35,6 +35,12 @@ struct SF2Voice {
     double releaseRate = 0.0;
     double envLevel = 0.0;
     double releaseLevel = 0.0;
+    int envStage = 0; // 0=delay, 1=attack, 2=hold, 3=decay, 4=sustain, 5=release
+    int envDelaySamples = 0;
+    int envHoldSamples = 0;
+    int envDelayCount = 0;
+    int envHoldCount = 0;
+    double scaleTuning = 1.0; // SF2 scaleTuning: 100=equal temperament
     double filterFc = 13500.0;
     double filterQ = 0.7;
     bool filterActive = false;
@@ -122,6 +128,11 @@ private:
         double decay = 0.0;
         double sustain = 1.0;
         double release = 0.0;
+        double delayVolEnv = 0.0;
+        double holdVolEnv = 0.0;
+        double scaleTuning = 1.0;
+        double reverbSend = 0.0;  // SF2 gen 15: reverbEffectsSend (0-1000, centibels)
+        double chorusSend = 0.0;  // SF2 gen 16: chorusEffectsSend (0-1000, centibels)
         double filterFc = 13500.0;
         double filterQ = 0.7;
         bool filterActive = false; // true if SF2 gen 43 explicitly set

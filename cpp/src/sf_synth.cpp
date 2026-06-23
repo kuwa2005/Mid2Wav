@@ -112,6 +112,8 @@ void SFSynthesizer::buildPresetZones(int channel) {
         bool hasSustain = false;
         bool hasRelease = false;
         bool hasFilterQ = false;
+        double delayVolEnv = 0.0;
+        double holdVolEnv = 0.0;
         bool hasLoopMode = false;
     };
 
@@ -128,6 +130,9 @@ void SFSynthesizer::buildPresetZones(int channel) {
             case 9: st.zone.filterQ = a / 10.0; st.hasFilterQ = true; break;
             case 12: st.endOffset += (int64_t)a * 32768; break;
             case 17: st.zone.pan += a / 500.0; break;
+            case 24: st.zone.scaleTuning = a / 100.0; break; // scaleTuning: cents per key
+            case 25: st.delayVolEnv = timecentsToSeconds(a); break; // delayVolEnv
+            case 26: st.holdVolEnv = timecentsToSeconds(a); break; // holdVolEnv (overrides decay sustain hold)
             case 34: st.zone.attack = timecentsToSeconds(a); st.hasAttack = true; break;
             case 36: st.zone.decay = timecentsToSeconds(a); st.hasDecay = true; break;
             case 37: st.zone.sustain = attenuateDb(a / 10.0); st.hasSustain = true; break;
@@ -144,6 +149,9 @@ void SFSynthesizer::buildPresetZones(int channel) {
             case 54: st.zone.loopMode = a & 0x3; st.hasLoopMode = true; break;
             case 57: st.zone.exclusiveClass = a; break;
             case 58: st.zone.rootKey = a; st.hasRootKey = true; break;
+            // SF2 generators 15/16: reverb/chorus send (centibels, 0=none, 1000=max)
+            case 15: st.zone.reverbSend = a / 10.0; break; // convert centibels to dB
+            case 16: st.zone.chorusSend = a / 10.0; break;
             default: break;
         }
     };
@@ -367,7 +375,9 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     if (isDrumChannel) {
         v.pitchRatio = zone.sampleRate / (double)m_sampleRate;
     } else {
-        v.pitchRatio = (noteFreq / rootFreq) * std::pow(2.0, (pitchBend + tuning) / 12.0)
+        // Scale tuning: cents per key deviation from equal temperament (100 cents/key)
+        double scaleTuningCents = (v.scaleTuning - 1.0) * (note - zone.rootKey) * 100.0;
+        v.pitchRatio = (noteFreq / rootFreq) * std::pow(2.0, (pitchBend + tuning + scaleTuningCents) / 12.0)
                        * (zone.sampleRate / (double)m_sampleRate);
     }
 
@@ -387,6 +397,16 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     v.sustainLevel = std::clamp(zone.sustain, 0.0, 1.0);
     v.releaseRate = 1.0 / (rTime * m_sampleRate);
     v.releaseLevel = 1.0;
+
+    // VolEnv delay/hold
+    v.envDelaySamples = (int)(zone.delayVolEnv * m_sampleRate);
+    v.envHoldSamples = (int)(zone.holdVolEnv * m_sampleRate);
+    v.envDelayCount = 0;
+    v.envHoldCount = 0;
+    v.envStage = (v.envDelaySamples > 0) ? 0 : 1; // start at delay or attack
+
+    // Scale tuning (cents per key, default 100 = equal temperament)
+    v.scaleTuning = zone.scaleTuning;
 
     v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
     v.filterQ = std::max(0.5, zone.filterQ);
@@ -658,17 +678,30 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
     for (int i = 0; i < count; i++) {
         if (!v.active) break;
 
-        // Update envelope
+        // Update envelope with delay/hold stages
         if (v.releasing) {
             v.envLevel -= v.releaseRate;
             if (v.envLevel <= 0.0) { v.envLevel = 0.0; v.active = false; }
         } else {
-            if (v.envLevel < 1.0) {
-                v.envLevel += v.attackRate;
-                if (v.envLevel >= 1.0) { v.envLevel = 1.0; }
-            } else if (v.envLevel > v.sustainLevel) {
-                v.envLevel -= v.decayRate;
-                if (v.envLevel < v.sustainLevel) v.envLevel = v.sustainLevel;
+            switch (v.envStage) {
+                case 0: // delay
+                    v.envDelayCount++;
+                    if (v.envDelayCount >= v.envDelaySamples) v.envStage = 1;
+                    break;
+                case 1: // attack
+                    v.envLevel += v.attackRate;
+                    if (v.envLevel >= 1.0) { v.envLevel = 1.0; v.envStage = 2; }
+                    break;
+                case 2: // hold
+                    v.envHoldCount++;
+                    if (v.envHoldCount >= v.envHoldSamples) v.envStage = 3;
+                    break;
+                case 3: // decay
+                    v.envLevel -= v.decayRate;
+                    if (v.envLevel <= v.sustainLevel) { v.envLevel = v.sustainLevel; v.envStage = 4; }
+                    break;
+                case 4: // sustain
+                    break;
             }
         }
 
@@ -701,13 +734,19 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         }
         if (idx < (int)v.sampleStart) { idx = (int)v.sampleStart; v.position = 0; }
 
-        // Lanczos-2 interpolation (high quality, reduced aliasing)
-        const int16_t* sd = m_sf2->sampleData();
+        // Lanczos-2 interpolation with loop-aware tap wrapping
+        const int32_t* sd = m_sf2->sampleData();
         size_t sdSize = m_sf2->sampleDataSize();
+        uint32_t loopLen = (v.loopEnd > v.loopStart) ? (v.loopEnd - v.loopStart) : 0;
         auto getSample = [&](int pos) -> double {
+            // Loop-aware clamping: taps near loopEnd wrap to loopStart
+            if (loopLen > 0 && v.loop) {
+                while (pos >= (int)v.loopEnd) pos -= (int)loopLen;
+                while (pos < (int)v.loopStart) pos += (int)loopLen;
+            }
             if (pos < (int)v.sampleStart) pos = (int)v.sampleStart;
             if (pos >= (int)v.sampleEnd) pos = (int)v.sampleEnd - 1;
-            if (pos >= 0 && pos < (int)sdSize) return sd[pos] / 32768.0;
+            if (pos >= 0 && pos < (int)sdSize) return sd[pos] / 8388608.0; // 24-bit: /2^23
             return 0.0;
         };
         double frac = absPos - std::floor(absPos);

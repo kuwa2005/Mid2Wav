@@ -97,7 +97,7 @@ public:
     const std::vector<SF2Generator>& presetGenerators() const { return m_presetGenerators; }
     const std::vector<SF2InstBag>& instBags() const { return m_instBags; }
     const std::vector<SF2Generator>& instGenerators() const { return m_instGenerators; }
-    const int16_t* sampleData() const { return m_sampleData.data(); }
+    const int32_t* sampleData() const { return m_sampleData.data(); }
     size_t sampleDataSize() const { return m_sampleData.size(); }
 
     int findPreset(uint16_t bank, uint16_t preset) const;
@@ -108,7 +108,7 @@ private:
     bool parseSDTA(const uint8_t* data, size_t size);
     bool parsePDTA(const uint8_t* data, size_t size);
 
-    std::vector<int16_t> m_sampleData;
+    std::vector<int32_t> m_sampleData;
     std::vector<SF2Sample> m_samples;
     std::vector<SF2Preset> m_presets;
     std::vector<SF2PresetBag> m_presetBags;
