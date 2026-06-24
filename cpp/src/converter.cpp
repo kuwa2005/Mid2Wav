@@ -4,6 +4,7 @@
 #include "soundfont.h"
 #include "sf_synth.h"
 #include "log.h"
+#include "progress.h"
 #include <iostream>
 #include <filesystem>
 #include <chrono>
@@ -232,10 +233,13 @@ int runConverter(const ConvertOptions& opts) {
     BatchLogger* logger = opts.csvLog ? new BatchLogger(opts.outputPath) : nullptr;
     int success = 0, failed = 0;
 
+    BatchProgress progress;
+    progress.beginBatch(static_cast<int>(midiFiles.size()));
+
     for (size_t idx = 0; idx < midiFiles.size(); idx++) {
         auto& midiPath = midiFiles[idx];
         std::string fileName = fs::path(midiPath).stem().string();
-        LOG_PROGRESS() << "\n[" << (idx + 1) << "/" << midiFiles.size() << "] " << fileName;
+        progress.beginFile(static_cast<int>(idx), fileName);
 
         BatchLogEntry log;
         log.inputFile = midiPath;
@@ -249,8 +253,10 @@ int runConverter(const ConvertOptions& opts) {
                 log.status = "fail"; log.failReason = "Failed to load MIDI";
                 if (logger) logger->addEntry(log);
                 failed++;
+                progress.endFile();
                 continue;
             }
+            progress.setFilePercent(ProgressStage::MidiLoaded);
 
             auto tracks = midi.analyzeTracks();
             LOG_DEBUG() << "  [Debug] Tracks analyzed, notes=" << midi.notes().size();
@@ -268,6 +274,8 @@ int runConverter(const ConvertOptions& opts) {
                       << "  Device: " << deviceName(runOpts.device);
 
             if (opts.analyzeOnly) {
+                progress.setFilePercent(ProgressStage::Done);
+                progress.endFile();
                 LOG_PROGRESS() << formatAnalysisText(tracks, midi);
                 log.status = "success";
                 if (logger) logger->addEntry(log);
@@ -283,12 +291,15 @@ int runConverter(const ConvertOptions& opts) {
             } else {
                 synth.initFallback(48000);
             }
+            progress.setFilePercent(ProgressStage::SynthReady);
 
             // チャンネル別レンダリング（--chでフィルタ可能）
             synth.renderToWavPerChannel(midi.notes(), fileName, runOpts.outputPath, midi, runOpts.pitchShift, runOpts.noNormalize, runOpts.channelFilter);
+            progress.setFilePercent(ProgressStage::RenderEnd);
 
             // 加算ミックスで全トラック合成WAVを生成（--no-mixでスキップ）
             if (!runOpts.noMix) {
+                progress.setFilePercent(ProgressStage::Mixing);
                 SFSynthesizer::mixFromChannelWavs(runOpts.outputPath, fileName, outPath, 48000, runOpts.noNormalize);
             }
 
@@ -308,15 +319,24 @@ int runConverter(const ConvertOptions& opts) {
             log.status = "success";
             log.processingTimeMs = std::chrono::duration_cast<std::chrono::milliseconds>(procEnd - procStart).count();
 
-            LOG_PROGRESS() << "  [Done] " << outPath << " (" << log.processingTimeMs << "ms)";
+            progress.setFilePercent(ProgressStage::Done);
+            if (Log::progressLineActive()) {
+                std::ostringstream doneLine;
+                doneLine << progress.formatLine() << " (" << log.processingTimeMs << "ms)";
+                Log::updateProgressLine(doneLine.str());
+            } else {
+                LOG_PROGRESS() << "  [Done] " << outPath << " (" << log.processingTimeMs << "ms)";
+            }
             if (logger) logger->addEntry(log);
             success++;
+            progress.endFile();
 
         } catch (const std::exception& e) {
             LOG_ERROR() << "  [ERROR] " << e.what();
             log.status = "fail"; log.failReason = e.what();
             if (logger) logger->addEntry(log);
             failed++;
+            progress.endFile();
         }
     }
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <iostream>
 #include <sstream>
+#include <string>
 
 enum class LogLevel { Progress = 0, Info = 1, Debug = 2 };
 
@@ -16,6 +17,22 @@ inline void configure(bool verbose, bool debug) {
 
 inline bool enabled(LogLevel level) {
     return static_cast<int>(level) <= g_maxLevel;
+}
+
+inline bool progressLineActive() {
+    return g_maxLevel == static_cast<int>(LogLevel::Progress);
+}
+
+inline void updateProgressLine(const std::string& text) {
+    if (!progressLineActive()) return;
+    std::string line = text;
+    if (line.size() < 80) line.append(80 - line.size(), ' ');
+    std::cout << '\r' << line << std::flush;
+}
+
+inline void finishProgressLine() {
+    if (!progressLineActive()) return;
+    std::cout << std::endl;
 }
 
 class Line {

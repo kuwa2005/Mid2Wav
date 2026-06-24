@@ -2,6 +2,7 @@
 #include "converter.h"
 #include "wav_writer.h"
 #include "log.h"
+#include "progress.h"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -1685,7 +1686,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             right[pos + i] = br[i];
         }
 
-        if ((pos / BS) % 50 == 0) {
+        if ((pos / BS) % 50 == 0 && !BatchProgress::active()) {
             LOG_RAW_PROGRESS() << "\r  [Render] " << (int)((double)pos / totalSamples * 100) << "%   " << std::flush;
         }
     }
@@ -1807,9 +1808,14 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
     LOG_INFO() << "  [Channel Split] " << usedChannels.size() << " channels, "
               << (int)totalSec << " sec...";
 
+    if (BatchProgress* bp = BatchProgress::active()) {
+        bp->setFilePercent(ProgressStage::RenderStart);
+    }
+
     const auto& expr = midi.expression();
 
-    for (int ch : usedChannels) {
+    for (size_t chIdx = 0; chIdx < usedChannels.size(); chIdx++) {
+        int ch = usedChannels[chIdx];
         int noteCount = 0;
         for (auto& n : notes) if (n.channel == ch) noteCount++;
 
@@ -2065,6 +2071,23 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
                 left[pos + i] = bl[i];
                 right[pos + i] = br[i];
             }
+
+            if (BatchProgress* bp = BatchProgress::active()) {
+                if ((pos / BS) % 50 == 0) {
+                    int samplePct = totalSamples > 0
+                        ? static_cast<int>(static_cast<double>(pos) / totalSamples * 100)
+                        : 100;
+                    bp->setRenderProgress(static_cast<int>(chIdx),
+                                          static_cast<int>(usedChannels.size()),
+                                          samplePct);
+                }
+            }
+        }
+
+        if (BatchProgress* bp = BatchProgress::active()) {
+            bp->setRenderProgress(static_cast<int>(chIdx + 1),
+                                  static_cast<int>(usedChannels.size()),
+                                  0);
         }
 
         // 正規化 (--no-normalize対応)
