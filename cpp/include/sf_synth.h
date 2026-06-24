@@ -132,7 +132,14 @@ public:
                                const std::string& outputDir,
                                const MidiFile& midi,
                                int pitchShift = 0,
-                               bool noNormalize = false);
+                               bool noNormalize = false,
+                               const std::vector<int>& channelFilter = {});
+
+    static bool mixFromChannelWavs(const std::string& channelDir,
+                                   const std::string& baseName,
+                                   const std::string& outputPath,
+                                   int sampleRate,
+                                   bool noNormalize = false);
 
     void noteOn(int channel, int note, int velocity);
     void noteOff(int channel, int note);

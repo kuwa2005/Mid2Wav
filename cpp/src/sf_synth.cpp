@@ -9,6 +9,7 @@
 #include <numeric>
 #include <tuple>
 #include <iterator>
+#include <filesystem>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -1144,7 +1145,7 @@ void SFSynthesizer::processBlock(std::vector<float>& left, std::vector<float>& r
     for (auto& v : m_voices) {
         if (!v.active) continue;
         bool isDrum = (m_channels[v.channel].bank == 128);
-        if (drumsOnly != isDrum) continue;
+        if (drumsOnly && !isDrum) continue;
         v.age++;
         if (m_fallbackMode) {
             processVoiceFallback(v, left.data(), right.data(), count, m_sampleRate);
@@ -1497,12 +1498,6 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                                   float* drumSegL, float* drumSegR) {
             int64_t segTick = tickForTime((double)(pos + segEndSample) / m_sampleRate);
 
-            // Remove dry drum contribution from main mix before FX processing.
-            // Both reverb.h and chorus.h mono-sum their input, which causes:
-            //   - Drums: pipe-like resonance from comb filters
-            //   - All parts: chorus LFO modulates entire mix uniformly
-            // By removing drums before FX and adding them back dry, we eliminate both.
-
             // Reverb: channel CC + GS send + SF2 voice sends (melody only)
             float reverbMix = m_reverbLevel;
             for (int ch = 0; ch < 16; ch++) {
@@ -1730,7 +1725,8 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
                                            const std::string& outputDir,
                                            const MidiFile& midi,
                                            int pitchShift,
-                                           bool noNormalize) {
+                                           bool noNormalize,
+                                           const std::vector<int>& channelFilter) {
     if (notes.empty()) return;
 
     auto t0 = std::chrono::steady_clock::now();
@@ -1751,6 +1747,17 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         for (auto& n : notes) {
             if (n.channel == ch) { usedChannels.push_back(ch); break; }
         }
+    }
+
+    // チャンネルフィルタ適用
+    if (!channelFilter.empty()) {
+        std::vector<int> filtered;
+        for (int ch : usedChannels) {
+            if (std::find(channelFilter.begin(), channelFilter.end(), ch) != channelFilter.end()) {
+                filtered.push_back(ch);
+            }
+        }
+        usedChannels = filtered;
     }
 
     // 最大テンポリ長を計算
@@ -1815,7 +1822,12 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
 
         int partMode = expr.getValueAtTick(expr.sysPartMode[ch], firstNoteTick, -1);
         chBank = effectiveBankMSB(ch, chBank, firstNoteTick, expr);
-        if (ch != 9 && partMode == 1 && chBank == 0) chBank = 128;
+        if (ch == 9) {
+            // GM: Ch10 is drums by default (bank=128)
+            if (chBank == 0) chBank = 128;
+        } else if (partMode == 1 && chBank == 0) {
+            chBank = 128;
+        }
 
         // このチャンネルのノートのみを抽出
         std::vector<MidiNote> chNotes;
@@ -2117,4 +2129,64 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
     auto t1 = std::chrono::steady_clock::now();
     std::cout << "  [Channel Split] Done (" << std::chrono::duration<double>(t1 - t0).count()
               << " sec)" << std::endl;
+}
+
+bool SFSynthesizer::mixFromChannelWavs(const std::string& channelDir,
+                                       const std::string& baseName,
+                                       const std::string& outputPath,
+                                       int sampleRate,
+                                       bool noNormalize) {
+    if (!std::filesystem::is_directory(channelDir)) return false;
+
+    std::vector<float> mixL, mixR;
+    int mixSamples = 0;
+    int filesFound = 0;
+
+    for (auto& entry : std::filesystem::directory_iterator(channelDir)) {
+        if (!entry.is_regular_file()) continue;
+        std::string fname = entry.path().filename().string();
+        if (fname.find(baseName + "_") != 0) continue;
+        if (fname.substr(fname.size() - 4) != ".wav") continue;
+
+        std::vector<float> chL, chR;
+        int chRate = 0;
+        if (!WavReader::read(entry.path().string(), chL, chR, chRate)) continue;
+
+        if (filesFound == 0) {
+            mixL.resize(chL.size(), 0.0f);
+            mixR.resize(chR.size(), 0.0f);
+            mixSamples = (int)chL.size();
+        } else {
+            if ((int)chL.size() > mixSamples) {
+                mixL.resize(chL.size(), 0.0f);
+                mixR.resize(chR.size(), 0.0f);
+                mixSamples = (int)chL.size();
+            }
+        }
+
+        for (int i = 0; i < (int)chL.size(); i++) {
+            mixL[i] += chL[i];
+            mixR[i] += chR[i];
+        }
+        filesFound++;
+    }
+
+    if (filesFound == 0) return false;
+
+    // Normalize
+    if (!noNormalize) {
+        float peak = 1e-6f;
+        for (int i = 0; i < mixSamples; i++) {
+            float lv = std::isfinite(mixL[i]) ? std::abs(mixL[i]) : 0.0f;
+            float rv = std::isfinite(mixR[i]) ? std::abs(mixR[i]) : 0.0f;
+            peak = std::max(peak, std::max(lv, rv));
+        }
+        float gain = (peak > 1e-6f) ? (0.95f / peak) : 1.0f;
+        for (int i = 0; i < mixSamples; i++) {
+            mixL[i] = std::isfinite(mixL[i]) ? mixL[i] * gain : 0.0f;
+            mixR[i] = std::isfinite(mixR[i]) ? mixR[i] * gain : 0.0f;
+        }
+    }
+
+    return WavWriter::write(outputPath, mixL, mixR, sampleRate);
 }

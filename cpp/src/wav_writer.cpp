@@ -1,5 +1,6 @@
 #include "wav_writer.h"
 #include <cstdio>
+#include <cstring>
 #include <algorithm>
 #include <cmath>
 
@@ -51,5 +52,72 @@ bool WavWriter::write(const std::string& path,
     fwrite(interleaved.data(), dataSize, 1, f);
     fclose(f);
 
+    return true;
+}
+
+bool WavReader::read(const std::string& path,
+                     std::vector<float>& left, std::vector<float>& right,
+                     int& sampleRate) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+
+    // RIFF header
+    char riff[4];
+    if (fread(riff, 1, 4, f) != 4 || memcmp(riff, "RIFF", 4) != 0) { fclose(f); return false; }
+    uint32_t fileSize;
+    if (fread(&fileSize, 4, 1, f) != 1) { fclose(f); return false; }
+    char wave[4];
+    if (fread(wave, 1, 4, f) != 4 || memcmp(wave, "WAVE", 4) != 0) { fclose(f); return false; }
+
+    uint16_t numChannels = 0;
+    uint16_t bitsPerSample = 0;
+    uint32_t dataSize = 0;
+    bool foundFmt = false, foundData = false;
+
+    while (!feof(f) && !(foundFmt && foundData)) {
+        char chunkId[4];
+        if (fread(chunkId, 1, 4, f) != 4) break;
+        uint32_t chunkSize;
+        if (fread(&chunkSize, 4, 1, f) != 1) break;
+
+        if (memcmp(chunkId, "fmt ", 4) == 0) {
+            uint16_t audioFmt;
+            fread(&audioFmt, 2, 1, f);
+            fread(&numChannels, 2, 1, f);
+            fread(&sampleRate, 4, 1, f);
+            uint32_t byteRate;
+            fread(&byteRate, 4, 1, f);
+            uint16_t blockAlign;
+            fread(&blockAlign, 2, 1, f);
+            fread(&bitsPerSample, 2, 1, f);
+            if (chunkSize > 16) fseek(f, chunkSize - 16, SEEK_CUR);
+            foundFmt = true;
+        } else if (memcmp(chunkId, "data", 4) == 0) {
+            dataSize = chunkSize;
+            foundData = true;
+        } else {
+            fseek(f, chunkSize, SEEK_CUR);
+        }
+    }
+
+    if (!foundFmt || !foundData || (numChannels != 2) || (bitsPerSample != 16)) {
+        fclose(f);
+        return false;
+    }
+
+    uint32_t sampleCount = dataSize / (numChannels * sizeof(int16_t));
+    std::vector<int16_t> interleaved(sampleCount * 2);
+    if (fread(interleaved.data(), sizeof(int16_t), sampleCount * 2, f) != sampleCount * 2) {
+        fclose(f);
+        return false;
+    }
+    fclose(f);
+
+    left.resize(sampleCount);
+    right.resize(sampleCount);
+    for (size_t i = 0; i < sampleCount; i++) {
+        left[i] = interleaved[i * 2] / 32768.0f;
+        right[i] = interleaved[i * 2 + 1] / 32768.0f;
+    }
     return true;
 }

@@ -18,6 +18,8 @@ struct ConvertOptions {
     bool csvLog = false;
     bool noNormalize = false;
     double gainDb = 0.0; // Master gain in dB
+    std::vector<int> channelFilter; // empty = all channels
+    bool noMix = false; // skip final mix (only channel WAVs)
 };
 
 struct BatchLogEntry {

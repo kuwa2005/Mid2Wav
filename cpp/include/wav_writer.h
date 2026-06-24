@@ -9,3 +9,9 @@ struct WavWriter {
                       const std::vector<float>& right,
                       int sampleRate);
 };
+
+struct WavReader {
+    static bool read(const std::string& path,
+                     std::vector<float>& left, std::vector<float>& right,
+                     int& sampleRate);
+};

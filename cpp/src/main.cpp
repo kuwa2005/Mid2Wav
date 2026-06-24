@@ -1,6 +1,7 @@
 #include "converter.h"
 #include <iostream>
 #include <string>
+#include <sstream>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -21,10 +22,12 @@ void printUsage() {
               << "                              Roland: SC-55, SC-88, SC-88VL, SC-8850\n"
               << "                              Yamaha: MU-50, MU-80, MU-100, MU-128, MOTIF\n"
               << "  --channels                Split output per MIDI channel\n"
+              << "  --ch <ch,...>             Render only specified channels (1-16), e.g. --ch 10\n"
               << "  --pitch <semitones>       Transpose all notes (+12=+1oct, -12=-1oct)\n"
               << "  --csv                     Output batch log CSV file\n"
               << "  --gain <dB>              Master gain adjustment in dB (+6 louder, -6 quieter)\n"
               << "  --no-normalize            Skip peak normalization\n"
+              << "  --no-mix                  Skip final mix (output channel WAVs only)\n"
               << "  --analyze                 Analyze only (no convert)\n"
               << "  --help, -h                Show this help\n";
 }
@@ -48,8 +51,18 @@ int main(int argc, char* argv[]) {
             else opts.sf2Path = v;
         }
         else if (a == "--channels") opts.channelSplit = true;
+        else if (a == "--ch") {
+            std::string v = next();
+            std::istringstream ss(v);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                int ch = std::stoi(token) - 1; // 1-based to 0-based
+                if (ch >= 0 && ch < 16) opts.channelFilter.push_back(ch);
+            }
+        }
         else if (a == "--csv") opts.csvLog = true;
         else if (a == "--no-normalize") opts.noNormalize = true;
+        else if (a == "--no-mix") opts.noMix = true;
         else if (a == "--gain") opts.gainDb = std::stod(next());
         else if (a == "--pitch") opts.pitchShift = std::stoi(next());
         else if (a == "--device") {

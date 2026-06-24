@@ -283,10 +283,24 @@ int runConverter(const ConvertOptions& opts) {
                 synth.initFallback(48000);
             }
 
-            if (runOpts.channelSplit) {
-                synth.renderToWavPerChannel(midi.notes(), fileName, runOpts.outputPath, midi, runOpts.pitchShift, runOpts.noNormalize);
+            // チャンネル別レンダリング（--chでフィルタ可能）
+            synth.renderToWavPerChannel(midi.notes(), fileName, runOpts.outputPath, midi, runOpts.pitchShift, runOpts.noNormalize, runOpts.channelFilter);
+
+            // 加算ミックスで全トラック合成WAVを生成（--no-mixでスキップ）
+            if (!runOpts.noMix) {
+                SFSynthesizer::mixFromChannelWavs(runOpts.outputPath, fileName, outPath, 48000, runOpts.noNormalize);
             }
-            synth.renderToWav(midi.notes(), outPath, runOpts, midi);
+
+            // --channels/--ch/--no-mix未指定なら個別チャンネルWAVを削除
+            if (!runOpts.channelSplit && runOpts.channelFilter.empty() && !runOpts.noMix) {
+                for (auto& entry : fs::directory_iterator(runOpts.outputPath)) {
+                    if (!entry.is_regular_file()) continue;
+                    std::string fname = entry.path().filename().string();
+                    if (fname.find(fileName + "_") == 0 && fname.substr(fname.size() - 4) == ".wav") {
+                        fs::remove(entry.path());
+                    }
+                }
+            }
 
             auto procEnd = std::chrono::steady_clock::now();
             log.outputFile = outPath;

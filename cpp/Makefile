@@ -33,6 +33,18 @@ src/%.win.o: src/%.cpp
 both: linux windows
 
 clean:
-	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET)
+	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) test/test_all.o test/test_all
 
-.PHONY: all linux windows both clean
+test: test/test_all
+	./test/test_all
+
+TEST_SRCS = test/test_all.cpp src/wav_writer.cpp src/sf_synth.cpp src/midi_file.cpp src/soundfont.cpp
+TEST_OBJS = $(TEST_SRCS:.cpp=.o)
+
+test/test_all: $(TEST_OBJS)
+	$(CXX) $(TEST_OBJS) -o test/test_all -lm
+
+test/%.o: test/%.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+.PHONY: all linux windows both clean test
