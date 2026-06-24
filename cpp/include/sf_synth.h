@@ -52,6 +52,17 @@ struct SF2Voice {
     double zonePan = 0.0;        // SF2 zone pan (set at noteOn, preserved)
     double portamentoProgress = 1.0; // 0.0=old pitch, 1.0=new pitch
     double vibratoPhase = 0.0;
+    double vibLFOFrequency = 8.176; // SF2 freqVibLFO (Hz)
+    double vibLFODelay = 0.0;       // SF2 delayVibLFO (seconds)
+    int vibLFODelayCount = 0;       // samples until LFO starts
+    double modLFOFrequency = 8.176; // SF2 freqModLFO (Hz)
+    double modLFODelay = 0.0;       // SF2 delayModLFO (seconds)
+    int modLFODelayCount = 0;       // samples until LFO starts
+    double modLFOPhase = 0.0;
+    double modLfoToPitch = 0.0;     // SF2 gen 5
+    double vibLfoToPitch = 0.0;     // SF2 gen 6
+    double modLfoToFilterFc = 0.0;  // SF2 gen 10
+    double modLfoToVolume = 0.0;    // SF2 gen 13
     double reverbSend = 0.0;  // SF2 reverb send per voice
     double chorusSend = 0.0;  // SF2 chorus send per voice
     // Modulation envelope (separate from volume envelope)
@@ -146,27 +157,40 @@ private:
         double delayVolEnv = 0.0;
         double holdVolEnv = 0.0;
         double scaleTuning = 1.0;
-        double reverbSend = 0.0;  // SF2 gen 15: reverbEffectsSend (0-1000, centibels)
-        double chorusSend = 0.0;  // SF2 gen 16: chorusEffectsSend (0-1000, centibels)
-        double keynumToFilterFc = 0.0; // SF2 gen 31: cents per key above 60
-        double velToFilter = 0.0; // velocity to filter mapping depth
-        double modEnvToFilterFc = 0.0; // SF2 gen 32: modEnv to filter Fc (cents)
-        double modEnvToVolume = 0.0; // SF2 gen 33: modEnv to volume (centibels)
-        double modEnvAttack = 0.0;   // SF2 gen 39
-        double modEnvDecay = 0.0;    // SF2 gen 40
-        double modEnvSustain = 1.0;  // SF2 gen 41
-        double modEnvRelease = 0.0;  // SF2 gen 42
+        double reverbSend = 0.0;   // SF2 gen 16: reverbEffectsSend
+        double chorusSend = 0.0;   // SF2 gen 15: chorusEffectsSend
+        double freqVibLFO = 8.176; // SF2 gen 24: Vibrato LFO frequency (Hz)
+        double delayVibLFO = 0.0;  // SF2 gen 23: Vibrato LFO delay (seconds)
+        double freqModLFO = 8.176; // SF2 gen 22: Modulation LFO frequency (Hz)
+        double delayModLFO = 0.0;  // SF2 gen 21: Modulation LFO delay (seconds)
+        double modLfoToPitch = 0.0;  // SF2 gen 5: cents
+        double vibLfoToPitch = 0.0;  // SF2 gen 6: cents
+        double modEnvToPitch = 0.0;  // SF2 gen 7: cents
+        double modLfoToFilterFc = 0.0;// SF2 gen 10: cents
+        double modLfoToVolume = 0.0;  // SF2 gen 13: centibels
+        double delayModEnv = 0.0;  // SF2 gen 25
+        double attackModEnv = 0.0; // SF2 gen 26
+        double holdModEnv = 0.0;   // SF2 gen 27
+        double decayModEnv = 0.0;  // SF2 gen 28
+        double sustainModEnv = 1.0;// SF2 gen 29
+        double releaseModEnv = 0.0;// SF2 gen 30
+        double keynumToModEnvHold = 0.0;  // SF2 gen 31
+        double keynumToModEnvDecay = 0.0; // SF2 gen 32
+        double modEnvToFilterFc = 0.0;    // SF2 gen 11
+        double modEnvToVolume = 0.0;      // SF2 gen 13 (modLfoToVolume)
+        double keynumToVolEnvHold = 0.0;  // SF2 gen 39
+        double keynumToVolEnvDecay = 0.0; // SF2 gen 40
         double filterFc = 13500.0;
         double filterQ = 0.7;
-        bool filterActive = false; // true if SF2 gen 43 explicitly set
+        bool filterActive = false;
         double sampleRate = 44100.0;
         uint32_t sampleStart = 0;
         uint32_t sampleEnd = 0;
         uint32_t loopStart = 0;
         uint32_t loopEnd = 0;
         bool loop = false;
-        int loopMode = 0; // 0=no loop, 1=continuous, 3=loop until release
-        bool loopStopPending = false; // mode 3: stop after current loop cycle
+        int loopMode = 0;
+        bool loopStopPending = false;
         uint16_t exclusiveClass = 0;
     };
 

@@ -132,7 +132,7 @@ bool SoundFont::parsePDTA(const uint8_t* data, size_t size) {
                 m_presets[i].bank = readUint16(d + 22);
                 // SF2 spec: dwPresetBagNdx is at offset 24 (4 bytes)
                 // But some SF2 files use 38-byte records where bagNdx is at offset 24
-                m_presets[i].presetBagNdx = readUint16(d + 24);
+                m_presets[i].presetBagNdx = readUint32(d + 24);
             }
         } else if (memcmp(chunkId, "pbag", 4) == 0) {
             size_t count = chunkSize / 4;
@@ -157,7 +157,7 @@ bool SoundFont::parsePDTA(const uint8_t* data, size_t size) {
                 const uint8_t* d = data + pos + i * 22;
                 m_instruments[i].name = std::string((const char*)d, 20);
                 while (!m_instruments[i].name.empty() && m_instruments[i].name.back() == '\0') m_instruments[i].name.pop_back();
-                m_instruments[i].instBagNdx = readUint16(d + 20); // uint16, not uint32
+                m_instruments[i].instBagNdx = readUint32(d + 20);
             }
         } else if (memcmp(chunkId, "ibag", 4) == 0) {
             size_t count = chunkSize / 4;

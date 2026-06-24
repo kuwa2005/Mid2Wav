@@ -58,6 +58,8 @@ struct MidiExpression {
     std::vector<std::pair<int64_t, int>> breath[16];
     // フットコントローラ (CC4): (tick, value 0-127)
     std::vector<std::pair<int64_t, int>> foot[16];
+    // Channel Pressure (aftertouch): (tick, value 0-127)
+    std::vector<std::pair<int64_t, int>> channelPressure[16];
     // Data Entry MSB (CC6): (tick, value 0-127)
     std::vector<std::pair<int64_t, int>> dataEntryMSB[16];
     // Data Entry LSB (CC38): (tick, value 0-127)
@@ -109,6 +111,7 @@ struct MidiExpression {
     void addDelayDepth(int ch, int64_t tick, int value) { delayDepth[ch].push_back({tick, value}); }
     void addBreath(int ch, int64_t tick, int value) { breath[ch].push_back({tick, value}); }
     void addFoot(int ch, int64_t tick, int value) { foot[ch].push_back({tick, value}); }
+    void addChannelPressure(int ch, int64_t tick, int value) { channelPressure[ch].push_back({tick, value}); }
     void addDataEntryMSB(int ch, int64_t tick, int value) { dataEntryMSB[ch].push_back({tick, value}); }
     void addDataEntryLSB(int ch, int64_t tick, int value) { dataEntryLSB[ch].push_back({tick, value}); }
     void addNrpnLSB(int ch, int64_t tick, int value) { nrpnLSB[ch].push_back({tick, value}); }
@@ -136,6 +139,7 @@ struct MidiExpression {
             std::sort(delayDepth[ch].begin(), delayDepth[ch].end(), cmp);
             std::sort(breath[ch].begin(), breath[ch].end(), cmp);
             std::sort(foot[ch].begin(), foot[ch].end(), cmp);
+            std::sort(channelPressure[ch].begin(), channelPressure[ch].end(), cmp);
             std::sort(dataEntryMSB[ch].begin(), dataEntryMSB[ch].end(), cmp);
             std::sort(dataEntryLSB[ch].begin(), dataEntryLSB[ch].end(), cmp);
             std::sort(nrpnLSB[ch].begin(), nrpnLSB[ch].end(), cmp);
@@ -265,9 +269,12 @@ private:
 
     static uint16_t readUint16(const uint8_t* d) { return (d[0] << 8) | d[1]; }
     static uint32_t readUint32(const uint8_t* d) { return ((uint32_t)d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3]; }
-    static uint32_t readVarLen(const uint8_t* d, size_t& pos) {
+    static uint32_t readVarLen(const uint8_t* d, size_t& pos, size_t maxSize) {
         uint32_t v = 0; uint8_t b;
-        do { b = d[pos++]; v = (v << 7) | (b & 0x7F); } while (b & 0x80);
+        do {
+            if (pos >= maxSize) return v;
+            b = d[pos++]; v = (v << 7) | (b & 0x7F);
+        } while (b & 0x80);
         return v;
     }
 };

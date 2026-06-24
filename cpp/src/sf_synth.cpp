@@ -112,8 +112,6 @@ void SFSynthesizer::buildPresetZones(int channel) {
         bool hasSustain = false;
         bool hasRelease = false;
         bool hasFilterQ = false;
-        double delayVolEnv = 0.0;
-        double holdVolEnv = 0.0;
         bool hasLoopMode = false;
     };
 
@@ -126,13 +124,16 @@ void SFSynthesizer::buildPresetZones(int channel) {
             case 2: st.startLoopOffset += a; break;
             case 3: st.endLoopOffset += a; break;
             case 4: st.startOffset += (int64_t)a * 32768; break;
+            case 5: st.zone.modLfoToPitch = a; break;      // SF2 gen 5: modLfoToPitch (cents)
+            case 6: st.zone.vibLfoToPitch = a; break;      // SF2 gen 6: vibLfoToPitch (cents)
+            case 7: st.zone.modEnvToPitch = a; break;      // SF2 gen 7: modEnvToPitch (cents)
             case 8: st.zone.filterFc = std::pow(2.0, a / 1200.0) * 8.176; st.zone.filterActive = true; break;
             case 9: st.zone.filterQ = a / 10.0; st.hasFilterQ = true; break;
             case 12: st.endOffset += (int64_t)a * 32768; break;
+            case 10: st.zone.modLfoToFilterFc = a; break;   // SF2 gen 10: modLfoToFilterFc (cents)
+            case 11: st.zone.modEnvToFilterFc = a; break;   // SF2 gen 11: modEnvToFilterFc (cents)
+            case 13: st.zone.modLfoToVolume = a; break;     // SF2 gen 13: modLfoToVolume (centibels)
             case 17: st.zone.pan += a / 500.0; break;
-            case 24: st.zone.scaleTuning = a / 100.0; break; // scaleTuning: cents per key
-            case 25: st.delayVolEnv = timecentsToSeconds(a); break; // delayVolEnv
-            case 26: st.holdVolEnv = timecentsToSeconds(a); break; // holdVolEnv (overrides decay sustain hold)
             case 34: st.zone.attack = timecentsToSeconds(a); st.hasAttack = true; break;
             case 36: st.zone.decay = timecentsToSeconds(a); st.hasDecay = true; break;
             case 37: st.zone.sustain = attenuateDb(a / 10.0); st.hasSustain = true; break;
@@ -149,20 +150,43 @@ void SFSynthesizer::buildPresetZones(int channel) {
             case 54: st.zone.loopMode = a & 0x3; st.hasLoopMode = true; break;
             case 57: st.zone.exclusiveClass = a; break;
             case 58: st.zone.rootKey = a; st.hasRootKey = true; break;
-            // SF2 generators 15/16: reverb/chorus send (centibels, 0=none, 1000=max)
-            case 15: st.zone.reverbSend = a / 10.0; break; // convert centibels to dB
-            case 16: st.zone.chorusSend = a / 10.0; break;
-            // SF2 generator 31: keynum to filter Fc (cents per key above 60)
-            case 31: st.zone.keynumToFilterFc = a / 100.0; break;
-            // SF2 generator 32: modEnv to filter Fc (cents)
-            case 32: st.zone.modEnvToFilterFc = a; break;
-            // SF2 generator 33: modEnv to volume (centibels)
-            case 33: st.zone.modEnvToVolume = a; break;
-            // SF2 generators 39-42: ModEnv ADSR
-            case 39: st.zone.modEnvAttack = timecentsToSeconds(a); break;
-            case 40: st.zone.modEnvDecay = timecentsToSeconds(a); break;
-            // case 41: keynumToVolEnvDecay (not modEnv - handled separately)
-            case 42: st.zone.modEnvSustain = attenuateDb(a / 10.0); break;
+            // SF2 gen 15: chorusEffectsSend (0.1% units, 0-1000)
+            case 15: st.zone.chorusSend = a / 1000.0; break;
+            // SF2 gen 16: reverbEffectsSend (0.1% units, 0-1000)
+            case 16: st.zone.reverbSend = a / 1000.0; break;
+            // SF2 gen 21: delayModLFO (timecents)
+            case 21: st.zone.delayModLFO = timecentsToSeconds(a); break;
+            // SF2 gen 22: freqModLFO (absolute cents, 0=8.176Hz)
+            case 22: st.zone.freqModLFO = std::pow(2.0, a / 1200.0) * 8.176; break;
+            case 23: st.zone.delayVibLFO = timecentsToSeconds(a); break;
+            // SF2 gen 24: freqVibLFO (absolute cents, 0=8.176Hz)
+            case 24: st.zone.freqVibLFO = std::pow(2.0, a / 1200.0) * 8.176; break;
+            // SF2 gen 25: delayModEnv (timecents)
+            case 25: st.zone.delayModEnv = timecentsToSeconds(a); break;
+            // SF2 gen 26: attackModEnv (timecents)
+            case 26: st.zone.attackModEnv = timecentsToSeconds(a); break;
+            // SF2 gen 27: holdModEnv (timecents)
+            case 27: st.zone.holdModEnv = timecentsToSeconds(a); break;
+            // SF2 gen 28: decayModEnv (timecents)
+            case 28: st.zone.decayModEnv = timecentsToSeconds(a); break;
+            // SF2 gen 29: sustainModEnv (-0.1% units, 0=attack peak)
+            case 29: st.zone.sustainModEnv = a / 1000.0; break;
+            // SF2 gen 30: releaseModEnv (timecents)
+            case 30: st.zone.releaseModEnv = timecentsToSeconds(a); break;
+            // SF2 gen 31: keynumToModEnvHold (timecents/key)
+            case 31: st.zone.keynumToModEnvHold = a / 100.0; break;
+            // SF2 gen 32: keynumToModEnvDecay (timecents/key)
+            case 32: st.zone.keynumToModEnvDecay = a / 100.0; break;
+            // SF2 gen 33: delayVolEnv (timecents)
+            case 33: st.zone.delayVolEnv = timecentsToSeconds(a); break;
+            // SF2 gen 35: holdVolEnv (timecents)
+            case 35: st.zone.holdVolEnv = timecentsToSeconds(a); break;
+            // SF2 gen 39: keynumToVolEnvHold (timecents/key)
+            case 39: st.zone.keynumToVolEnvHold = a / 100.0; break;
+            // SF2 gen 40: keynumToVolEnvDecay (timecents/key)
+            case 40: st.zone.keynumToVolEnvDecay = a / 100.0; break;
+            // SF2 gen 56: scaleTuning (cents/key, 100=equal temperament)
+            case 56: st.zone.scaleTuning = a / 100.0; break;
             default: break;
         }
     };
@@ -223,14 +247,32 @@ void SFSynthesizer::buildPresetZones(int channel) {
         if (b.hasInstrument) { r.instIdx = b.instIdx; r.hasInstrument = true; }
         if (b.hasSample) r.hasSample = true;
         // SF2 fields that need merge (not copied by default since GenState defaults to 0)
-        if (b.delayVolEnv > 0.0) r.delayVolEnv = b.delayVolEnv;
-        if (b.holdVolEnv > 0.0) r.holdVolEnv = b.holdVolEnv;
+        if (b.zone.delayVolEnv > 0.0) r.zone.delayVolEnv = b.zone.delayVolEnv;
+        if (b.zone.holdVolEnv > 0.0) r.zone.holdVolEnv = b.zone.holdVolEnv;
         if (b.zone.scaleTuning != 1.0) r.zone.scaleTuning = b.zone.scaleTuning;
         if (b.zone.reverbSend != 0.0) r.zone.reverbSend = b.zone.reverbSend;
         if (b.zone.chorusSend != 0.0) r.zone.chorusSend = b.zone.chorusSend;
-        if (b.zone.keynumToFilterFc != 0.0) r.zone.keynumToFilterFc = b.zone.keynumToFilterFc;
+        if (b.zone.freqVibLFO != 8.176) r.zone.freqVibLFO = b.zone.freqVibLFO;
+        if (b.zone.delayVibLFO > 0.0) r.zone.delayVibLFO = b.zone.delayVibLFO;
+        if (b.zone.freqModLFO != 8.176) r.zone.freqModLFO = b.zone.freqModLFO;
+        if (b.zone.delayModLFO > 0.0) r.zone.delayModLFO = b.zone.delayModLFO;
+        if (b.zone.modLfoToPitch != 0.0) r.zone.modLfoToPitch = b.zone.modLfoToPitch;
+        if (b.zone.vibLfoToPitch != 0.0) r.zone.vibLfoToPitch = b.zone.vibLfoToPitch;
+        if (b.zone.modEnvToPitch != 0.0) r.zone.modEnvToPitch = b.zone.modEnvToPitch;
+        if (b.zone.modLfoToFilterFc != 0.0) r.zone.modLfoToFilterFc = b.zone.modLfoToFilterFc;
+        if (b.zone.modLfoToVolume != 0.0) r.zone.modLfoToVolume = b.zone.modLfoToVolume;
+        if (b.zone.delayModEnv > 0.0) r.zone.delayModEnv = b.zone.delayModEnv;
+        if (b.zone.attackModEnv > 0.0) r.zone.attackModEnv = b.zone.attackModEnv;
+        if (b.zone.holdModEnv > 0.0) r.zone.holdModEnv = b.zone.holdModEnv;
+        if (b.zone.decayModEnv > 0.0) r.zone.decayModEnv = b.zone.decayModEnv;
+        if (b.zone.sustainModEnv < 1.0) r.zone.sustainModEnv = b.zone.sustainModEnv;
+        if (b.zone.releaseModEnv > 0.0) r.zone.releaseModEnv = b.zone.releaseModEnv;
+        if (b.zone.keynumToModEnvHold != 0.0) r.zone.keynumToModEnvHold = b.zone.keynumToModEnvHold;
+        if (b.zone.keynumToModEnvDecay != 0.0) r.zone.keynumToModEnvDecay = b.zone.keynumToModEnvDecay;
         if (b.zone.modEnvToFilterFc != 0.0) r.zone.modEnvToFilterFc = b.zone.modEnvToFilterFc;
         if (b.zone.modEnvToVolume != 0.0) r.zone.modEnvToVolume = b.zone.modEnvToVolume;
+        if (b.zone.keynumToVolEnvHold != 0.0) r.zone.keynumToVolEnvHold = b.zone.keynumToVolEnvHold;
+        if (b.zone.keynumToVolEnvDecay != 0.0) r.zone.keynumToVolEnvDecay = b.zone.keynumToVolEnvDecay;
         r.startOffset += b.startOffset;
         r.endOffset += b.endOffset;
         r.startLoopOffset += b.startLoopOffset;
@@ -264,9 +306,6 @@ void SFSynthesizer::buildPresetZones(int channel) {
 
             GenState state = mergeState(pState, mergeState(instGlobal, iLocal));
             ResolvedZone z = state.zone;
-            // Copy GenState-level fields that aren't in zone
-            z.delayVolEnv = state.delayVolEnv;
-            z.holdVolEnv = state.holdVolEnv;
             if (z.sampleIndex < 0 || z.sampleIndex >= (int)samples.size()) continue;
             if (z.keyLow > z.keyHigh || z.velLow > z.velHigh) continue; // empty intersection → skip
 
@@ -407,19 +446,22 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
                        * (zone.sampleRate / (double)m_sampleRate);
     }
 
-    double velAmp = (double)velocity / 127.0;
-    double attenLin = attenuateDb(zone.attenuation);
-    v.amplitude = velAmp * attenLin;
+    // SF2 default modulator: velocity to initial attenuation (spec 8.4.1)
+    // Negative Unipolar Linear: vel 1→127/128, vel 127→0, amount=960 cB
+    double velModInput = (velocity > 0) ? (128.0 - velocity) / 128.0 : 1.0;
+    double velAttenuation = zone.attenuation + velModInput * 96.0; // 960 cB = 96 dB
+    v.amplitude = attenuateDb(velAttenuation);
     // Boost drum channel volume (+9.5dB) to balance with melody parts
     if (m_channels[channel].bank == 128) {
         v.amplitude *= 3.0;
     }
 
-    // SF2 default modulator: velocity to filter cutoff (0-24 semitones range)
-    // Higher velocity = brighter tone (filter opens more)
+    // SF2 default modulator: velocity to filter cutoff (spec 8.4.2)
+    // Negative Unipolar Linear: vel 0→127/128, vel 127→0, amount=-2400 cents
     if (v.filterActive && velocity > 0) {
-        double velToFilter = (velocity / 127.0) * 24.0; // 0-24 semitones
-        v.filterFc = zone.filterFc * std::pow(2.0, velToFilter / 12.0);
+        double velFilterInput = (128.0 - velocity) / 128.0;
+        double velFilterShift = velFilterInput * -24.0; // -2400 cents = -24 semitones
+        v.filterFc = zone.filterFc * std::pow(2.0, velFilterShift / 12.0);
         v.filterFc = std::clamp(v.filterFc, 20.0, m_sampleRate * 0.45);
     }
 
@@ -446,12 +488,6 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     v.envStage = (v.envDelaySamples > 0) ? 0 : 1; // start at delay or attack
 
     v.filterFc = std::clamp(zone.filterFc, 20.0, m_sampleRate * 0.49);
-    // SF2 default modulator: keynum to filter Fc
-    if (zone.keynumToFilterFc != 0.0 && v.filterActive) {
-        double keynumShift = zone.keynumToFilterFc * (note - 60);
-        v.filterFc *= std::pow(2.0, keynumShift / 1200.0);
-        v.filterFc = std::clamp(v.filterFc, 20.0, m_sampleRate * 0.45);
-    }
     // SF2 default modulator: velocity to filter Fc
     if (v.filterActive && velocity > 0) {
         double velShift = (velocity / 127.0) * 24.0; // up to 24 semitones
@@ -466,6 +502,18 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     // Reduced from 2.0 to 0.5 to match typical SF2 default modulator behavior
     // where CC1 maps to vibLFO-to-pitch with moderate depth
     v.vibratoDepth = m_channels[channel].modulation / 127.0 * 0.5;
+    v.vibLFOFrequency = zone.freqVibLFO;
+    v.vibLFODelay = zone.delayVibLFO;
+    v.vibLFODelayCount = (int)(zone.delayVibLFO * m_sampleRate);
+    v.modLFOFrequency = zone.freqModLFO;
+    v.modLFODelay = zone.delayModLFO;
+    v.modLFODelayCount = (int)(zone.delayModLFO * m_sampleRate);
+    v.modLfoToPitch = zone.modLfoToPitch;
+    v.vibLfoToPitch = zone.vibLfoToPitch;
+    v.modLfoToFilterFc = zone.modLfoToFilterFc;
+    v.modLfoToVolume = zone.modLfoToVolume;
+    v.vibratoPhase = 0.0;
+    v.modLFOPhase = 0.0;
     v.rootKey = zone.rootKey;
     v.basePitchRatio = v.pitchRatio;
 
@@ -478,12 +526,12 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     v.modEnvToFilterFc = zone.modEnvToFilterFc;
     v.modEnvToVolume = zone.modEnvToVolume;
     // Use SF2 gen 39-42 values if set, otherwise fallback to VolEnv timing
-    double mAttack = std::max(zone.modEnvAttack, 0.001);
-    double mDecay = std::max(zone.modEnvDecay, 0.001);
-    double mRelease = std::max(zone.modEnvRelease, 0.001);
+    double mAttack = std::max(zone.attackModEnv, 0.001);
+    double mDecay = std::max(zone.decayModEnv, 0.001);
+    double mRelease = std::max(zone.releaseModEnv, 0.001);
     v.modEnvAttackRate = 1.0 / (mAttack * m_sampleRate);
-    v.modEnvDecayRate = (1.0 - zone.modEnvSustain) / (mDecay * m_sampleRate);
-    v.modEnvSustainLevel = zone.modEnvSustain;
+    v.modEnvDecayRate = (1.0 - zone.sustainModEnv) / (mDecay * m_sampleRate);
+    v.modEnvSustainLevel = zone.sustainModEnv;
     v.modEnvReleaseRate = 1.0 / (mRelease * m_sampleRate);
     v.modEnvStage = 1; // start at attack
     v.modEnvDelaySamples = v.envDelaySamples;
@@ -752,12 +800,16 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
     double chPan = (m_channels[v.channel].pan - 64) / 64.0;
     v.pan = std::clamp(v.zonePan + chPan, -1.0, 1.0);
 
-    // Update LFO phase for this voice (4Hz for natural vibrato)
+    // Update LFO phase for this voice (SF2 VibLFO with delay)
     double lfoValue = 0.0;
     if (v.vibratoDepth > 0.0 && !isDrumChannel) {
-        v.vibratoPhase += 2.0 * M_PI * 4.0 / m_sampleRate;
-        if (v.vibratoPhase > 2.0 * M_PI) v.vibratoPhase -= 2.0 * M_PI;
-        lfoValue = std::sin(v.vibratoPhase);
+        if (v.vibLFODelayCount > 0) {
+            v.vibLFODelayCount--;
+        } else {
+            v.vibratoPhase += 2.0 * M_PI * v.vibLFOFrequency / m_sampleRate;
+            if (v.vibratoPhase > 2.0 * M_PI) v.vibratoPhase -= 2.0 * M_PI;
+            lfoValue = std::sin(v.vibratoPhase);
+        }
     }
     for (int i = 0; i < count; i++) {
         if (!v.active) break;
@@ -877,9 +929,24 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
                    + s2 * lanczos(x - 1.0) + s3 * lanczos(x - 2.0);
         }
 
+        // ModLFO computation (shared by filter and volume)
+        double modLfoValue = 0.0;
+        if ((v.modLfoToFilterFc != 0.0 || v.modLfoToVolume != 0.0 || v.modLfoToPitch != 0.0) && !isDrumChannel) {
+            if (v.modLFODelayCount > 0) v.modLFODelayCount--;
+            else {
+                v.modLFOPhase += 2.0 * M_PI * v.modLFOFrequency / m_sampleRate;
+                if (v.modLFOPhase > 2.0 * M_PI) v.modLFOPhase -= 2.0 * M_PI;
+            }
+            modLfoValue = std::sin(v.modLFOPhase);
+        }
+
         // Biquad low-pass filter
         double modulatedFc = v.filterFc;
-        // ModEnv to filter Fc (gen 32)
+        // ModLFO to filter Fc (gen 10)
+        if (v.modLfoToFilterFc != 0.0) {
+            modulatedFc *= std::pow(2.0, modLfoValue * v.modLfoToFilterFc / 1200.0);
+        }
+        // ModEnv to filter Fc (gen 11)
         if (v.modEnvToFilterFc != 0.0) {
             modulatedFc *= std::pow(2.0, v.modEnvLevel * v.modEnvToFilterFc / 1200.0);
         }
@@ -908,11 +975,18 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         if (v.modEnvToVolume != 0.0) {
             envAmp *= attenuateDb(v.modEnvLevel * v.modEnvToVolume);
         }
-        double chVol = m_channels[v.channel].volume / 127.0;
-        double chExpr = m_channels[v.channel].expression / 127.0;
+        // SF2 default modulators: CC7/CC11 to initial attenuation (spec 8.4.5/8.4.7)
+        // Negative Unipolar Concave: cc 0→127/128 (max attn), cc 127→0 (min attn), amount=960 cB
+        auto concave = [](double x) -> double { return 1.0 - std::cos(x * M_PI / 2.0); };
+        double cc7Atten = concave((128.0 - m_channels[v.channel].volume) / 128.0) * 96.0;
+        double cc11Atten = concave((128.0 - m_channels[v.channel].expression) / 128.0) * 96.0;
         double breathAmp = m_channels[v.channel].breath > 0 ? (0.5 + 0.5 * m_channels[v.channel].breath / 127.0) : 1.0;
         double footAmp = m_channels[v.channel].foot > 0 ? (0.5 + 0.5 * m_channels[v.channel].foot / 127.0) : 1.0;
-        double vol = envAmp * chVol * chExpr * breathAmp * footAmp;
+        double vol = envAmp * breathAmp * footAmp * attenuateDb(cc7Atten) * attenuateDb(cc11Atten);
+        // ModLFO to volume (gen 13: tremolo, centibels)
+        if (v.modLfoToVolume != 0.0) {
+            vol *= attenuateDb(modLfoValue * v.modLfoToVolume);
+        }
 
         // Pan
         double panL = std::sqrt(0.5 * (1.0 - v.pan));
@@ -925,7 +999,10 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         if (std::isfinite(outR)) right[i] += (float)outR;
 
         // Advance
+        // Pitch modulation: CC1→VibLFO + SF2 vibLfoToPitch + modLfoToPitch
         double vibratoShift = lfoValue * v.vibratoDepth;
+        if (v.vibLfoToPitch != 0.0) vibratoShift += lfoValue * v.vibLfoToPitch / 100.0;
+        if (v.modLfoToPitch != 0.0) vibratoShift += modLfoValue * v.modLfoToPitch / 100.0;
 
         // Portamento: interpolate from old pitch to new pitch
         double effectivePitchRatio = v.basePitchRatio;

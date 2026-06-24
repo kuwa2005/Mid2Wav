@@ -182,7 +182,7 @@ void MidiFile::extractNotes() {
         std::vector<std::pair<int64_t, double>> trackTempo;
 
         while (pos < trackData.size()) {
-            uint32_t delta = readVarLen(trackData.data(), pos);
+            uint32_t delta = readVarLen(trackData.data(), pos, trackData.size());
             currentTick += delta;
 
             uint8_t status = trackData[pos];
@@ -192,7 +192,7 @@ void MidiFile::extractNotes() {
             if (status == 0xFF) {
                 runningStatus = 0;
                 uint8_t metaType = trackData[pos++];
-                uint32_t metaLen = readVarLen(trackData.data(), pos);
+                uint32_t metaLen = readVarLen(trackData.data(), pos, trackData.size());
                 if (metaType == 0x51 && metaLen == 3) {
                     uint32_t mpq = (trackData[pos] << 16) | (trackData[pos + 1] << 8) | trackData[pos + 2];
                     double bpm = 60000000.0 / mpq;
@@ -208,8 +208,19 @@ void MidiFile::extractNotes() {
                 continue;
             }
 
+            // System Common messages (clear running status per MIDI 1.0 spec)
+            if (status == 0xF1) { pos++; continue; } // MTC Quarter Frame: 1 data byte
+            if (status == 0xF2) { pos += 2; runningStatus = 0; continue; } // Song Position: 2 data bytes
+            if (status == 0xF3) { pos++; runningStatus = 0; continue; } // Song Select: 1 data byte
+            if (status == 0xF6) { runningStatus = 0; continue; } // Tune Request: 0 data bytes
+
+            // System Real-Time messages (single byte, do NOT clear running status)
+            if (status >= 0xF8 && status <= 0xFF) { continue; }
+
+            // System Exclusive
             if (status == 0xF0 || status == 0xF7) {
-                uint32_t sysexLen = readVarLen(trackData.data(), pos);
+                runningStatus = 0;
+                uint32_t sysexLen = readVarLen(trackData.data(), pos, trackData.size());
                 if (pos + sysexLen > trackData.size()) break;
                 size_t sysexStart = pos;
                 size_t sysexEnd = pos + sysexLen;
@@ -346,6 +357,12 @@ void MidiFile::extractNotes() {
                     case 94: m_expression.addDelayDepth(channel, currentTick, val); break;
                     default: break;
                 }
+            } else if (msgType == 0xA0) {
+                // Poly Key Pressure (aftertouch): 2 data bytes (note, pressure)
+                uint8_t note = trackData[pos++];
+                uint8_t pressure = trackData[pos++];
+                evt.data1 = note; evt.data2 = pressure;
+                trackEvts.push_back(evt);
             } else if (msgType == 0xE0) {
                 uint8_t lsb = trackData[pos++];
                 uint8_t msb = trackData[pos++];
@@ -362,114 +379,12 @@ void MidiFile::extractNotes() {
                 uint8_t d1 = trackData[pos++];
                 evt.data1 = d1;
                 trackEvts.push_back(evt);
+                m_expression.addChannelPressure(channel, currentTick, d1);
             }
 
-            // SysExメッセージ (F0 ... F7)
-            if (status == 0xF0) {
-                // F0の次のバイトから読み取り
-                size_t sysexStart = pos;
-                while (pos < trackData.size() && trackData[pos] != 0xF7) pos++;
-                if (pos < trackData.size()) pos++; // F7をスキップ
-                runningStatus = 0; // SysEx 後に Running Status をクリア
+            // SysExメッセージは先のF0/F7ブロックで処理済み
 
-                size_t sysexLen = pos - sysexStart;
-                if (sysexLen >= 2) {
-                    uint8_t mfr = trackData[sysexStart]; // メーカーID
-                    if (mfr == 0x41) {
-                        // Roland
-                        m_hasRolandGS = true;
-                        // Device ID (通常 10=0x10), Unit (0x42=GS)
-                        if (sysexLen >= 4 && trackData[sysexStart + 2] == 0x42) {
-                            // GS DT1 SysEx: F0 41 10 42 12 <addr> <data...> F7
-                            if (sysexLen >= 8 && trackData[sysexStart + 3] == 0x12) {
-                                uint8_t addr1 = trackData[sysexStart + 4]; // アドレス上位
-                                uint8_t addr2 = trackData[sysexStart + 5]; // アドレス中
-                                uint8_t addr3 = sysexLen > 6 ? trackData[sysexStart + 6] : 0; // アドレス下位
-
-                                // SC-8850 model ID detection
-                                if (addr1 == 0x00 && addr2 == 0x00 && sysexLen >= 10) {
-                                    if (trackData[sysexStart + 6] == 0x54 &&
-                                        trackData[sysexStart + 7] == 0x00 &&
-                                        trackData[sysexStart + 8] == 0x14) {
-                                        m_hasSC8850 = true;
-                                    }
-                                }
-
-                                // SC-88VL/SC-88: Model ID varies
-                                if (sysexLen >= 8 && trackData[sysexStart + 3] == 0x12) {
-                                    if (sysexLen >= 10) {
-                                        if (trackData[sysexStart + 6] == 0x54 &&
-                                            trackData[sysexStart + 7] == 0x00) {
-                                            uint8_t modelVer = trackData[sysexStart + 8];
-                                            if (modelVer == 0x08) m_hasSC88VL = true;
-                                            else if (modelVer == 0x04) m_hasSC88 = true;
-                                            else if (modelVer == 0x02) m_hasSC55 = true;
-                                        }
-                                    }
-                                }
-
-                                // GS エフェクトパラメータ解析
-                                // リバーブ: addr1=0x40, addr2=0x01
-                                if (addr1 == 0x40 && addr2 == 0x01 && sysexLen > 7) {
-                                    uint8_t param = addr3;
-                                    uint8_t val = trackData[sysexStart + 7];
-                                    switch (param) {
-                                        case 0x00: m_expression.sysReverbType.push_back({currentTick, val}); break;
-                                        case 0x01: m_expression.sysReverbChar.push_back({currentTick, val}); break;
-                                        case 0x02: m_expression.sysReverbPreLPF.push_back({currentTick, val}); break;
-                                        case 0x03: m_expression.sysReverbLevel.push_back({currentTick, val}); break;
-                                        case 0x04: m_expression.sysReverbDelay.push_back({currentTick, val}); break;
-                                    }
-                                }
-                                // コーラス: addr1=0x40, addr2=0x02
-                                if (addr1 == 0x40 && addr2 == 0x02 && sysexLen > 7) {
-                                    uint8_t param = addr3;
-                                    uint8_t val = trackData[sysexStart + 7];
-                                    switch (param) {
-                                        case 0x00: m_expression.sysChorusType.push_back({currentTick, val}); break;
-                                        case 0x02: m_expression.sysChorusLevel.push_back({currentTick, val}); break;
-                                        case 0x03: m_expression.sysChorusDelay.push_back({currentTick, val}); break;
-                                        case 0x04: m_expression.sysChorusFeed.push_back({currentTick, val}); break;
-                                    }
-                                }
-                                // ディレイ: addr1=0x40, addr2=0x03
-                                if (addr1 == 0x40 && addr2 == 0x03 && sysexLen > 7) {
-                                    uint8_t param = addr3;
-                                    uint8_t val = trackData[sysexStart + 7];
-                                    switch (param) {
-                                        case 0x00: m_expression.sysDelayType.push_back({currentTick, val}); break;
-                                        case 0x02: m_expression.sysDelayLevel.push_back({currentTick, val}); break;
-                                        case 0x03: m_expression.sysDelayTime.push_back({currentTick, val}); break;
-                                        case 0x04: m_expression.sysDelayFeed.push_back({currentTick, val}); break;
-                                    }
-                                }
-                                // パート別エフェクト送り量: addr1=0x40, addr2=0x10-0x1F
-                                if (addr1 == 0x40 && addr2 >= 0x10 && addr2 <= 0x1F && sysexLen > 7) {
-                                    int part = addr2 - 0x10;
-                                    uint8_t param = addr3;
-                                    uint8_t val = trackData[sysexStart + 7];
-                                    if (part >= 0 && part < 16) {
-                                        switch (param) {
-                                            case 0x03: m_expression.sysPartReverbSend[part].push_back({currentTick, val}); break;
-                                            case 0x05: m_expression.sysPartChorusSend[part].push_back({currentTick, val}); break;
-                                            case 0x06: m_expression.sysPartDelaySend[part].push_back({currentTick, val}); break;
-                                            case 0x15: m_expression.sysPartMode[part].push_back({currentTick, val}); break; // 0x00=Melody, 0x01=Rhythm
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else if (mfr == 0x43) {
-                        // Yamaha
-                        m_hasYamahaXG = true;
-                        // XG System: F0 43 10 4C ...
-                        if (sysexLen >= 3 && trackData[sysexStart + 2] == 0x4C) {
-                            // MU model detection from device ID or model-specific addresses
-                            // MU-128, MU-100, MU-80, MU-50 are detected by XG system
-                        }
-                    }
-                }
-            }
+            // チャンネル・ボイス・メッセージ以外はrunning statusを保持
         }
 
         // トラック終端で残存noteOnをフラッシュ
