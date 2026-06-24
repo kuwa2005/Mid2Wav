@@ -355,6 +355,54 @@ void SFSynthesizer::buildPresetZones(int channel) {
             z.loopEnd = (uint32_t)loopEnd;
             z.loop = (z.loopMode == 1 || z.loopMode == 3) && z.loopEnd > z.loopStart + 1;
 
+            // Handle stereo sample pairs (SF2 sampleType: 1=mono, 2=right, 4=left, 5=linked)
+            uint16_t sType = s.sampleType & 0xFF; // mask to get type (ignore ROM bits)
+            if (sType == 4) { // left sample
+                int linkIdx = s.sampleLink;
+                if (linkIdx >= 0 && linkIdx < (int)samples.size()) {
+                    const auto& linked = samples[linkIdx];
+                    z.sampleIndexR = linkIdx;
+                    // Linked (right) sample bounds
+                    int64_t rStart = (int64_t)linked.start + state.startOffset;
+                    int64_t rEnd = (int64_t)linked.end + state.endOffset;
+                    int64_t rLoopStart = (int64_t)linked.startLoop + state.startLoopOffset;
+                    int64_t rLoopEnd = (int64_t)linked.endLoop + state.endLoopOffset;
+                    rStart = std::clamp(rStart, (int64_t)0, sdSize);
+                    rEnd = std::clamp(rEnd, rStart + 1, sdSize);
+                    rLoopStart = std::clamp(rLoopStart, rStart, rEnd);
+                    rLoopEnd = std::clamp(rLoopEnd, rLoopStart, rEnd);
+                    z.sampleStartR = (uint32_t)rStart;
+                    z.sampleEndR = (uint32_t)rEnd;
+                    z.loopStartR = (uint32_t)rLoopStart;
+                    z.loopEndR = (uint32_t)rLoopEnd;
+                }
+            } else if (sType == 2) { // right sample
+                int linkIdx = s.sampleLink;
+                if (linkIdx >= 0 && linkIdx < (int)samples.size()) {
+                    const auto& linked = samples[linkIdx];
+                    z.sampleIndexR = (int)z.sampleIndex;
+                    z.sampleIndex = linkIdx; // primary becomes left
+                    // Copy left sample bounds from linked
+                    int64_t lStart = (int64_t)linked.start + state.startOffset;
+                    int64_t lEnd = (int64_t)linked.end + state.endOffset;
+                    int64_t lLoopStart = (int64_t)linked.startLoop + state.startLoopOffset;
+                    int64_t lLoopEnd = (int64_t)linked.endLoop + state.endLoopOffset;
+                    lStart = std::clamp(lStart, (int64_t)0, sdSize);
+                    lEnd = std::clamp(lEnd, lStart + 1, sdSize);
+                    lLoopStart = std::clamp(lLoopStart, lStart, lEnd);
+                    lLoopEnd = std::clamp(lLoopEnd, lLoopStart, lEnd);
+                    z.sampleStart = (uint32_t)lStart;
+                    z.sampleEnd = (uint32_t)lEnd;
+                    z.loopStart = (uint32_t)lLoopStart;
+                    z.loopEnd = (uint32_t)lLoopEnd;
+                    // Right sample bounds are the current sample's bounds (already set)
+                    z.sampleStartR = (uint32_t)start;
+                    z.sampleEndR = (uint32_t)end;
+                    z.loopStartR = (uint32_t)loopStart;
+                    z.loopEndR = (uint32_t)loopEnd;
+                }
+            }
+
             m_channelZones[channel].push_back(z);
             zoneCount++;
         }
@@ -420,10 +468,15 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     v.note = note;
     v.velocity = velocity;
     v.sampleIndex = zone.sampleIndex;
+    v.sampleIndexR = zone.sampleIndexR;
     v.sampleStart = zone.sampleStart;
     v.sampleEnd = zone.sampleEnd;
     v.loopStart = zone.loopStart;
     v.loopEnd = zone.loopEnd;
+    v.sampleStartR = zone.sampleStartR;
+    v.sampleEndR = zone.sampleEndR;
+    v.loopStartR = zone.loopStartR;
+    v.loopEndR = zone.loopEndR;
     v.loop = zone.loop;
     v.loopMode = zone.loopMode;
     v.exclusiveClass = zone.exclusiveClass;
@@ -446,22 +499,18 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
                        * (zone.sampleRate / (double)m_sampleRate);
     }
 
-    // SF2 default modulator: velocity to initial attenuation (spec 8.4.1)
-    // Negative Unipolar Linear: vel 1→127/128, vel 127→0, amount=960 cB
-    double velModInput = (velocity > 0) ? (128.0 - velocity) / 128.0 : 1.0;
-    double velAttenuation = zone.attenuation + velModInput * 96.0; // 960 cB = 96 dB
-    v.amplitude = attenuateDb(velAttenuation);
+    // Velocity to amplitude: higher velocity = louder
+    double velAmp = (velocity > 0) ? (double)velocity / 127.0 : 0.0;
+    v.amplitude = velAmp * attenuateDb(zone.attenuation);
     // Boost drum channel volume (+9.5dB) to balance with melody parts
     if (m_channels[channel].bank == 128) {
         v.amplitude *= 3.0;
     }
 
-    // SF2 default modulator: velocity to filter cutoff (spec 8.4.2)
-    // Negative Unipolar Linear: vel 0→127/128, vel 127→0, amount=-2400 cents
+    // SF2 default modulator: velocity to filter cutoff
     if (v.filterActive && velocity > 0) {
-        double velFilterInput = (128.0 - velocity) / 128.0;
-        double velFilterShift = velFilterInput * -24.0; // -2400 cents = -24 semitones
-        v.filterFc = zone.filterFc * std::pow(2.0, velFilterShift / 12.0);
+        double velToFilter = (velocity / 127.0) * 24.0; // 0-24 semitones
+        v.filterFc = zone.filterFc * std::pow(2.0, velToFilter / 12.0);
         v.filterFc = std::clamp(v.filterFc, 20.0, m_sampleRate * 0.45);
     }
 
@@ -901,9 +950,10 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         // Lanczos-2 interpolation (high quality, reduced aliasing)
         const int16_t* sd = m_sf2->sampleData();
         size_t sdSize = m_sf2->sampleDataSize();
-        auto getSample = [&](int pos) -> double {
-            if (pos < (int)v.sampleStart) pos = (int)v.sampleStart;
-            if (pos >= (int)v.sampleEnd) pos = (int)v.sampleEnd - 1;
+        bool isStereo = (v.sampleIndexR >= 0 && v.sampleIndexR != v.sampleIndex);
+        auto getSample = [&](int pos, int sStart, int sEnd) -> double {
+            if (pos < sStart) pos = sStart;
+            if (pos >= sEnd) pos = sEnd - 1;
             if (pos >= 0 && pos < (int)sdSize) return sd[pos] / 32768.0;
             return 0.0;
         };
@@ -911,7 +961,7 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         double sample;
         if (frac < 1e-10) {
             // Integer position: no interpolation needed
-            sample = getSample(idx);
+            sample = getSample(idx, v.sampleStart, v.sampleEnd);
         } else {
             // Lanczos-2 kernel (4 taps)
             double x = frac;
@@ -921,12 +971,44 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
                 double pi_t = M_PI * t;
                 return std::sin(pi_t) * std::sin(pi_t / 2.0) / (pi_t * pi_t / 2.0);
             };
-            double s0 = getSample(idx - 1);
-            double s1 = getSample(idx);
-            double s2 = getSample(idx + 1);
-            double s3 = getSample(idx + 2);
+            double s0 = getSample(idx - 1, v.sampleStart, v.sampleEnd);
+            double s1 = getSample(idx, v.sampleStart, v.sampleEnd);
+            double s2 = getSample(idx + 1, v.sampleStart, v.sampleEnd);
+            double s3 = getSample(idx + 2, v.sampleStart, v.sampleEnd);
             sample = s0 * lanczos(x + 1.0) + s1 * lanczos(x)
                    + s2 * lanczos(x - 1.0) + s3 * lanczos(x - 2.0);
+        }
+        // Right channel sample for stereo pairs
+        double sampleR = sample;
+        if (isStereo) {
+            // Compute right channel position using its own bounds
+            uint32_t rLoopLen = v.loopEndR - v.loopStartR;
+            double rAbsPos = v.position + v.sampleStartR;
+            if (v.loop && rLoopLen > 0) {
+                double rOffset = std::fmod(rAbsPos - v.loopStartR, (double)rLoopLen);
+                if (rOffset < 0) rOffset += rLoopLen;
+                rAbsPos = v.loopStartR + rOffset;
+            }
+            int rIdx = (int)rAbsPos;
+            if (rIdx < (int)v.sampleStartR) rIdx = (int)v.sampleStartR;
+            if (rIdx >= (int)v.sampleEndR) rIdx = (int)v.sampleEndR - 1;
+            double rFrac = rAbsPos - std::floor(rAbsPos);
+            if (rFrac < 1e-10) {
+                sampleR = getSample(rIdx, v.sampleStartR, v.sampleEndR);
+            } else {
+                auto lanczos = [](double t) -> double {
+                    if (std::abs(t) < 1e-10) return 1.0;
+                    if (std::abs(t) >= 2.0) return 0.0;
+                    double pi_t = M_PI * t;
+                    return std::sin(pi_t) * std::sin(pi_t / 2.0) / (pi_t * pi_t / 2.0);
+                };
+                double s0r = getSample(rIdx - 1, v.sampleStartR, v.sampleEndR);
+                double s1r = getSample(rIdx, v.sampleStartR, v.sampleEndR);
+                double s2r = getSample(rIdx + 1, v.sampleStartR, v.sampleEndR);
+                double s3r = getSample(rIdx + 2, v.sampleStartR, v.sampleEndR);
+                sampleR = s0r * lanczos(rFrac + 1.0) + s1r * lanczos(rFrac)
+                        + s2r * lanczos(rFrac - 1.0) + s3r * lanczos(rFrac - 2.0);
+            }
         }
 
         // ModLFO computation (shared by filter and volume)
@@ -975,14 +1057,11 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         if (v.modEnvToVolume != 0.0) {
             envAmp *= attenuateDb(v.modEnvLevel * v.modEnvToVolume);
         }
-        // SF2 default modulators: CC7/CC11 to initial attenuation (spec 8.4.5/8.4.7)
-        // Negative Unipolar Concave: cc 0→127/128 (max attn), cc 127→0 (min attn), amount=960 cB
-        auto concave = [](double x) -> double { return 1.0 - std::cos(x * M_PI / 2.0); };
-        double cc7Atten = concave((128.0 - m_channels[v.channel].volume) / 128.0) * 96.0;
-        double cc11Atten = concave((128.0 - m_channels[v.channel].expression) / 128.0) * 96.0;
+        double chVol = m_channels[v.channel].volume / 127.0;
+        double chExpr = m_channels[v.channel].expression / 127.0;
         double breathAmp = m_channels[v.channel].breath > 0 ? (0.5 + 0.5 * m_channels[v.channel].breath / 127.0) : 1.0;
         double footAmp = m_channels[v.channel].foot > 0 ? (0.5 + 0.5 * m_channels[v.channel].foot / 127.0) : 1.0;
-        double vol = envAmp * breathAmp * footAmp * attenuateDb(cc7Atten) * attenuateDb(cc11Atten);
+        double vol = envAmp * chVol * chExpr * breathAmp * footAmp;
         // ModLFO to volume (gen 13: tremolo, centibels)
         if (v.modLfoToVolume != 0.0) {
             vol *= attenuateDb(modLfoValue * v.modLfoToVolume);
@@ -993,7 +1072,7 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
         double panR = std::sqrt(0.5 * (1.0 + v.pan));
 
         double outL = sample * vol * panL;
-        double outR = sample * vol * panR;
+        double outR = sampleR * vol * panR;
 
         if (std::isfinite(outL)) left[i] += (float)outL;
         if (std::isfinite(outR)) right[i] += (float)outR;
@@ -1478,7 +1557,7 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 float sf2Chorus = std::min(sf2ChorusSum / (float)sf2ChorusCount, 1.0f);
                 chorusMix = std::max(chorusMix, sf2Chorus * 0.3f);
             }
-            if (chorusMix > 0.001f) m_chorus.process(segL, segR, len, chorusMix * 127.0f);
+            if (chorusMix > 0.001f) m_chorus.process(segL, segR, len, chorusMix * 16.0f);
 
             // Delay (melody only)
             float delaySum = 0.0f;

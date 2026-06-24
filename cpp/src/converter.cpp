@@ -9,6 +9,11 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -44,9 +49,30 @@ static const char* deviceName(DeviceModel d) {
     return "Unknown";
 }
 
+static std::string getExeDir() {
+#ifdef _WIN32
+    char buf[MAX_PATH];
+    DWORD len = GetModuleFileNameA(NULL, buf, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+        return fs::path(buf).parent_path().string();
+    }
+#else
+    char buf[4096];
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len > 0) {
+        buf[len] = '\0';
+        return fs::path(buf).parent_path().string();
+    }
+#endif
+    return ".";
+}
+
 static std::string findBestSoundFont() {
-    // 検索ディレクトリ
-    std::vector<std::string> searchDirs = {"soundfonts", "../soundfonts", "../../soundfonts"};
+    std::string exeDir = getExeDir();
+    std::vector<std::string> searchDirs = {
+        exeDir + "/soundfonts",
+        "soundfonts", "../soundfonts", "../../soundfonts"
+    };
 
     // 品質優先順位（名前に含まれるキーワードで判定）
     // 高品質: Tyroland > FluidR3 > GeneralUser > Arachno > Timbres > SGM > FatBoy

@@ -4,7 +4,7 @@ LDFLAGS =
 
 WIN_CXX = x86_64-w64-mingw32-g++
 WIN_CXXFLAGS = -std=c++17 -O2 -Wall -I include
-WIN_LDFLAGS =
+WIN_LDFLAGS = -static
 
 SRCS = src/main.cpp src/midi_file.cpp src/wav_writer.cpp src/soundfont.cpp src/sf_synth.cpp src/converter.cpp
 OBJS = $(SRCS:.cpp=.o)

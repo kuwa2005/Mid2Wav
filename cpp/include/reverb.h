@@ -45,16 +45,17 @@ public:
         if (!m_init || mix < 0.001f || count <= 0) return;
 
         // Clamp mix
-        mix = std::min(mix, 1.0f);
+        mix = std::min(mix, 0.8f);
 
         // Reverb parameters (Dattorro-inspired)
         // Drum mode: very short reverb to avoid long resonance on timpani/percussion
-        float combFeedback = drumMode ? 0.40f : (0.70f - mix * 0.10f);
-        float dampAmount = drumMode ? 0.65f : (0.35f + mix * 0.35f);
-        float allpassFeedback = drumMode ? 0.15f : 0.45f;
+        float combFeedback = drumMode ? 0.30f : (0.45f - mix * 0.10f);
+        float dampAmount = drumMode ? 0.75f : (0.50f + mix * 0.25f);
+        float allpassFeedback = drumMode ? 0.08f : 0.20f;
 
         for (int i = 0; i < count; i++) {
-            float input = (left[i] + right[i]) * 0.25f;
+            // Stereo-aware input: reduce mono sum to preserve stereo image
+            float input = (left[i] + right[i]) * 0.20f;
 
             // 4 comb filters in parallel
             float combOut = 0.0f;

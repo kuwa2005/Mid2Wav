@@ -16,10 +16,16 @@ struct SF2Voice {
     int note = -1;
     int velocity = 127;
     int sampleIndex = -1;
+    int sampleIndexR = -1; // Right channel sample for stereo pairs (-1 = mono or left-only)
     uint32_t sampleStart = 0;
     uint32_t sampleEnd = 0;
     uint32_t loopStart = 0;
     uint32_t loopEnd = 0;
+    // Linked (right) sample bounds for stereo pairs
+    uint32_t sampleStartR = 0;
+    uint32_t sampleEndR = 0;
+    uint32_t loopStartR = 0;
+    uint32_t loopEndR = 0;
     bool loop = false;
     int loopMode = 0; // 0=no loop, 1=continuous, 3=loop until release
     bool loopStopPending = false; // mode 3: stop after current loop cycle
@@ -188,6 +194,11 @@ private:
         uint32_t sampleEnd = 0;
         uint32_t loopStart = 0;
         uint32_t loopEnd = 0;
+        int sampleIndexR = -1; // Right channel sample for stereo pairs
+        uint32_t sampleStartR = 0;
+        uint32_t sampleEndR = 0;
+        uint32_t loopStartR = 0;
+        uint32_t loopEndR = 0;
         bool loop = false;
         int loopMode = 0;
         bool loopStopPending = false;
