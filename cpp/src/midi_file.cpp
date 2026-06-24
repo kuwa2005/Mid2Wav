@@ -196,7 +196,10 @@ void MidiFile::extractNotes() {
                 if (metaType == 0x51 && metaLen == 3) {
                     uint32_t mpq = (trackData[pos] << 16) | (trackData[pos + 1] << 8) | trackData[pos + 2];
                     double bpm = 60000000.0 / mpq;
-                    m_tempoMap.push_back({currentTick, bpm});
+                    if (currentTick == 0 && !m_tempoMap.empty() && m_tempoMap.back().first == 0)
+                        m_tempoMap.back().second = bpm;
+                    else
+                        m_tempoMap.push_back({currentTick, bpm});
                     trackTempo.push_back({currentTick, bpm});
                 }
                 if (metaType == 0x03) {

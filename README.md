@@ -134,6 +134,40 @@ output/test_11_Distortion_Guitar_P030_B128.wav  ← bank指定あり
 - アフタータッチ（0xD0 記録のみ）
 - SMPTE division 対応（480 tick 固定）
 
+
+## テスト
+
+`cpp/test/` に **32 ケース / 6 スイート** のユニットテストがあります。詳細なカバレッジ表・未テスト領域は [cpp/test/README.md](cpp/test/README.md) を参照してください。
+
+### 実行
+
+```bash
+cd cpp
+make test              # 全スイート
+make test-wav          # スイート単体（下表の名前に対応）
+make test-midi
+make test-soundfont
+make test-synth
+make test-fx
+make test-converter
+```
+
+前提: リポジトリルートに `soundfonts/TyrolandGSV30fix.sf2` を配置（git 未同梱）。
+
+### スイート一覧（GitHub / CI で検証する内容）
+
+| Makefile ターゲット | スイート | 件数 | 主な検証対象 |
+|--------------------|---------|------|-------------|
+| `test-wav` | wav | 3 | WAV 読み書き、チャンネルミックス |
+| `test-midi` | midi | 8 | SMF パース、テンポ、CC、GS SysEx、解析 |
+| `test-soundfont` | soundfont | 4 | SF2 読み込み、プリセット、エラー処理 |
+| `test-synth` | synth | 8 | シンセ描画、Ch10、ポリフォニー、CC91、フォールバック |
+| `test-fx` | fx | 6 | リバーブ / コーラス / ディレイ |
+| `test-converter` | converter | 3 | 解析出力、`runConverter`（analyze / フル変換） |
+| **`test`（全体）** | **全スイート** | **32** | 上記すべて |
+
+成功時の目安: `=== Results: 32 passed, 0 failed ===`
+
 ## ライセンス
 
 MIT License

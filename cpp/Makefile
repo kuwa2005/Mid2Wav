@@ -32,19 +32,51 @@ src/%.win.o: src/%.cpp
 
 both: linux windows
 
-clean:
-	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) test/test_all.o test/test_all
+# ── Tests ──────────────────────────────────────────────────────────
 
-test: test/test_all
-	./test/test_all
+TEST_SRCS = test/test_runner.cpp test/test_wav.cpp test/test_midi.cpp \
+            test/test_soundfont.cpp test/test_synth.cpp test/test_fx.cpp \
+            test/test_converter.cpp
+TEST_LIB_SRCS = src/wav_writer.cpp src/sf_synth.cpp src/midi_file.cpp \
+                src/soundfont.cpp src/converter.cpp
+TEST_OBJS = $(TEST_SRCS:.cpp=.o) $(TEST_LIB_SRCS:.cpp=.o)
+TEST_BIN = test/test_runner
 
-TEST_SRCS = test/test_all.cpp src/wav_writer.cpp src/sf_synth.cpp src/midi_file.cpp src/soundfont.cpp
-TEST_OBJS = $(TEST_SRCS:.cpp=.o)
+test: $(TEST_BIN)
+	./$(TEST_BIN)
 
-test/test_all: $(TEST_OBJS)
-	$(CXX) $(TEST_OBJS) -o test/test_all -lm
+test-all: test
+
+test-wav: $(TEST_BIN)
+	./$(TEST_BIN) wav
+
+test-midi: $(TEST_BIN)
+	./$(TEST_BIN) midi
+
+test-soundfont: $(TEST_BIN)
+	./$(TEST_BIN) soundfont
+
+test-synth: $(TEST_BIN)
+	./$(TEST_BIN) synth
+
+test-fx: $(TEST_BIN)
+	./$(TEST_BIN) fx
+
+test-converter: $(TEST_BIN)
+	./$(TEST_BIN) converter
+
+$(TEST_BIN): $(TEST_OBJS)
+	$(CXX) $(TEST_OBJS) -o $(TEST_BIN) -lm
 
 test/%.o: test/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-.PHONY: all linux windows both clean test
+clean:
+	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) \
+	      test/test_runner.o test/test_wav.o test/test_midi.o \
+	      test/test_soundfont.o test/test_synth.o test/test_fx.o \
+	      test/test_converter.o test/test_runner \
+	      test/test_all.o test/test_all
+
+.PHONY: all linux windows both clean test test-all \
+        test-wav test-midi test-soundfont test-synth test-fx test-converter

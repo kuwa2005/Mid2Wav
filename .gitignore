@@ -9,6 +9,7 @@ cpp/Mid2Wav_dbg
 # Test artifacts
 cpp/test/*.o
 cpp/test/test_all
+cpp/test/test_runner
 
 # Distribution
 dist/
