@@ -1,7 +1,13 @@
 # Build artifacts
 cpp/*.o
+cpp/src/*.o
+cpp/src/*.win.o
 cpp/Mid2Wav
+cpp/Mid2Wav.exe
 cpp/Mid2Wav_dbg
+
+# Distribution
+dist/
 
 # SoundFont files (too large for git)
 soundfonts/
