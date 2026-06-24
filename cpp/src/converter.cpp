@@ -293,25 +293,20 @@ int runConverter(const ConvertOptions& opts) {
             }
             progress.setFilePercent(ProgressStage::SynthReady);
 
-            // チャンネル別レンダリング（--chでフィルタ可能）
-            synth.renderToWavPerChannel(midi.notes(), fileName, runOpts.outputPath, midi, runOpts.pitchShift, runOpts.noNormalize, runOpts.channelFilter);
-            progress.setFilePercent(ProgressStage::RenderEnd);
-
-            // 加算ミックスで全トラック合成WAVを生成（--no-mixでスキップ）
-            if (!runOpts.noMix) {
-                progress.setFilePercent(ProgressStage::Mixing);
-                SFSynthesizer::mixFromChannelWavs(runOpts.outputPath, fileName, outPath, 48000, runOpts.noNormalize);
+            // --channels / --ch 指定時のみチャンネル別WAVを生成
+            const bool wantChannelWavs = runOpts.channelSplit || !runOpts.channelFilter.empty();
+            if (wantChannelWavs) {
+                synth.renderToWavPerChannel(midi.notes(), fileName, runOpts.outputPath, midi,
+                                              runOpts.pitchShift, runOpts.noNormalize, runOpts.channelFilter);
             }
 
-            // --channels/--ch/--no-mix未指定なら個別チャンネルWAVを削除
-            if (!runOpts.channelSplit && runOpts.channelFilter.empty() && !runOpts.noMix) {
-                for (auto& entry : fs::directory_iterator(runOpts.outputPath)) {
-                    if (!entry.is_regular_file()) continue;
-                    std::string fname = entry.path().filename().string();
-                    if (fname.find(fileName + "_") == 0 && fname.substr(fname.size() - 4) == ".wav") {
-                        fs::remove(entry.path());
-                    }
-                }
+            // フルミックスは renderToWav（ドラム分離FX・イベント駆動バンク/PC）で生成
+            if (!runOpts.noMix) {
+                progress.setFilePercent(ProgressStage::RenderStart);
+                synth.renderToWav(midi.notes(), outPath, runOpts, midi);
+                progress.setFilePercent(ProgressStage::RenderEnd);
+            } else if (wantChannelWavs) {
+                progress.setFilePercent(ProgressStage::RenderEnd);
             }
 
             auto procEnd = std::chrono::steady_clock::now();

@@ -2030,7 +2030,7 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
                 sendDly = std::max(sendDly, expr.getValueAtTick(expr.sysPartDelaySend[ch], segTick, 0));
                 float chDly = sendDly / 127.0f;
                 if (chRev > 0.001f) chSynth.m_reverb.process(segL, segR, len, chRev * 0.6f);
-                if (chChr > 0.001f) chSynth.m_chorus.process(segL, segR, len, chChr * 127.0f);
+                if (chChr > 0.001f) chSynth.m_chorus.process(segL, segR, len, (int)(chChr * 16.0f));
                 if (chDly > 0.001f) {
                     float dlyTime = 0.1f + chSynth.m_delayTime * 0.9f;
                     float feedback = 0.2f + chSynth.m_delayFeedback * 0.5f;
