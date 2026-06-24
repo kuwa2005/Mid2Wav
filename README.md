@@ -11,7 +11,10 @@ make linux        # Linux
 make              # macOS
 ```
 
-開発時: コード修正後は `make -C cpp` でビルドを実行すること。
+開発時: コード修正後は次のいずれかでビルドすること。
+
+- リポジトリルートから: `make -C cpp`
+- `cpp/` ディレクトリ内から: `make`（Linux は `make linux`）
 
 ## 使い方
 
