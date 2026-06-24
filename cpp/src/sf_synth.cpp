@@ -264,6 +264,9 @@ void SFSynthesizer::buildPresetZones(int channel) {
 
             GenState state = mergeState(pState, mergeState(instGlobal, iLocal));
             ResolvedZone z = state.zone;
+            // Copy GenState-level fields that aren't in zone
+            z.delayVolEnv = state.delayVolEnv;
+            z.holdVolEnv = state.holdVolEnv;
             if (z.sampleIndex < 0 || z.sampleIndex >= (int)samples.size()) continue;
             if (z.keyLow > z.keyHigh || z.velLow > z.velHigh) continue; // empty intersection → skip
 
@@ -407,6 +410,10 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     double velAmp = (double)velocity / 127.0;
     double attenLin = attenuateDb(zone.attenuation);
     v.amplitude = velAmp * attenLin;
+    // Boost drum channel volume (+9.5dB) to balance with melody parts
+    if (m_channels[channel].bank == 128) {
+        v.amplitude *= 3.0;
+    }
 
     // SF2 default modulator: velocity to filter cutoff (0-24 semitones range)
     // Higher velocity = brighter tone (filter opens more)
@@ -423,6 +430,8 @@ void SFSynthesizer::startVoice(const ResolvedZone& zone, int channel, int note, 
     double aTime = std::max(zone.attack, 0.001);
     double dTime = std::max(zone.decay, 0.001);
     double rTime = std::max(zone.release, 0.001);
+    // Cap release time to prevent extremely long tails (SF2 timpani can define 16-128+ sec)
+    rTime = std::min(rTime, 5.0);
     v.attackRate = 1.0 / (aTime * m_sampleRate);
     v.decayRate = (1.0 - zone.sustain) / (dTime * m_sampleRate);
     v.sustainLevel = std::clamp(zone.sustain, 0.0, 1.0);
@@ -683,6 +692,7 @@ void SFSynthesizer::controlChange(int channel, int cc, int value) {
             ch.pitchBend = 8192; ch.pitchBendRange = 2;
             ch.modulation = 0; ch.sustain = 0;
             ch.reverb = 0; ch.chorus = 0; ch.delay = 0;
+            ch.breath = 0; ch.foot = 0;
             ch.rpnLSB = 127; ch.rpnMSB = 127; ch.rpnValue = 0;
             break;
         case 123: // All Notes Off
@@ -722,9 +732,9 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
 
     bool isDrumChannel = (m_channels[v.channel].bank == 128);
 
-    // Update vibrato depth from CC1
+    // Update vibrato depth from CC1 (SF2 spec: moderate depth, not excessive)
     if (!isDrumChannel) {
-        v.vibratoDepth = m_channels[v.channel].modulation / 127.0 * 2.0;
+        v.vibratoDepth = m_channels[v.channel].modulation / 127.0 * 0.5;
     }
 
     // Live pitch ratio update (pitch bend, tuning)
@@ -742,10 +752,10 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
     double chPan = (m_channels[v.channel].pan - 64) / 64.0;
     v.pan = std::clamp(v.zonePan + chPan, -1.0, 1.0);
 
-    // Update LFO phase for this voice
+    // Update LFO phase for this voice (4Hz for natural vibrato)
     double lfoValue = 0.0;
     if (v.vibratoDepth > 0.0 && !isDrumChannel) {
-        v.vibratoPhase += 2.0 * M_PI * 5.0 / m_sampleRate;
+        v.vibratoPhase += 2.0 * M_PI * 4.0 / m_sampleRate;
         if (v.vibratoPhase > 2.0 * M_PI) v.vibratoPhase -= 2.0 * M_PI;
         lfoValue = std::sin(v.vibratoPhase);
     }
@@ -974,9 +984,11 @@ static void processVoiceFallback(SF2Voice& v, float* left, float* right, int cou
 
 // ─────────────────────────── block processing ────────────────────
 
-void SFSynthesizer::processBlock(std::vector<float>& left, std::vector<float>& right, int count) {
+void SFSynthesizer::processBlock(std::vector<float>& left, std::vector<float>& right, int count, bool drumsOnly) {
     for (auto& v : m_voices) {
         if (!v.active) continue;
+        bool isDrum = (m_channels[v.channel].bank == 128);
+        if (drumsOnly != isDrum) continue;
         v.age++;
         if (m_fallbackMode) {
             processVoiceFallback(v, left.data(), right.data(), count, m_sampleRate);
@@ -1325,30 +1337,28 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             if (t >= blockTickStart && t < blockTickEnd) m_delayFeedback = v / 127.0f;
         }
 
-        auto applyFxSegment = [&](float* segL, float* segR, int len, int segEndSample) {
+        auto applyFxSegment = [&](float* segL, float* segR, int len, int segEndSample,
+                                  float* drumSegL, float* drumSegR) {
             int64_t segTick = tickForTime((double)(pos + segEndSample) / m_sampleRate);
 
-            // Check if any drum voices are active
-            bool hasDrumActive = false;
-            for (auto& v : m_voices) {
-                if (v.active && m_channels[v.channel].bank == 128) { hasDrumActive = true; break; }
-            }
+            // Remove dry drum contribution from main mix before FX processing.
+            // Both reverb.h and chorus.h mono-sum their input, which causes:
+            //   - Drums: pipe-like resonance from comb filters
+            //   - All parts: chorus LFO modulates entire mix uniformly
+            // By removing drums before FX and adding them back dry, we eliminate both.
 
-            // Reverb: combine channel CC + GS send + SF2 voice sends
-            // Cap drum reverb to prevent 'pipe' sound on percussion
+            // Reverb: channel CC + GS send + SF2 voice sends (melody only)
             float reverbMix = m_reverbLevel;
             for (int ch = 0; ch < 16; ch++) {
+                if (m_channels[ch].bank == 128) continue;
                 int send = m_channels[ch].reverb;
                 send = std::max(send, expr.getValueAtTick(expr.sysPartReverbSend[ch], segTick, 0));
-                // Drums (bank==128): cap reverb to prevent excessive resonance
-                if (m_channels[ch].bank == 128) send = std::min(send, 80);
                 if (send > reverbMix * 127.0f) reverbMix = send / 127.0f;
             }
-            // Add SF2 reverb send from active voices (averaged)
             float sf2ReverbSum = 0.0f;
             int sf2ReverbCount = 0;
             for (auto& v : m_voices) {
-                if (v.active && v.reverbSend > 0.0f) {
+                if (v.active && v.reverbSend > 0.0f && m_channels[v.channel].bank != 128) {
                     sf2ReverbSum += v.reverbSend / 100.0f;
                     sf2ReverbCount++;
                 }
@@ -1358,22 +1368,17 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 reverbMix = std::max(reverbMix, sf2Reverb * 0.5f);
             }
             if (reverbMix > 0.001f) {
-                // For drums, use shorter reverb (lower feedback/damp) to avoid pipe resonance
-                float drumReverbMix = reverbMix * 0.6f;
-                if (hasDrumActive) drumReverbMix *= 0.5f;
-                // Drums need full dry signal for punch — use dedicated drum reverb with less dry attenuation
-                m_reverb.process(segL, segR, len, drumReverbMix, hasDrumActive);
+                m_reverb.process(segL, segR, len, reverbMix, false);
             }
 
-            // Chorus: use weighted average of send levels (not max)
-            // This prevents one loud chorus send from modulating all instruments
+            // Chorus: weighted average of send levels (melody only)
             float chorusSum = 0.0f;
             float chorusWeight = 0.0f;
             for (int ch = 0; ch < 16; ch++) {
+                if (m_channels[ch].bank == 128) continue;
                 float send = std::max((float)m_channels[ch].chorus,
                     (float)expr.getValueAtTick(expr.sysPartChorusSend[ch], segTick, 0)) / 127.0f;
                 if (send > 0.001f) {
-                    // Weight by how many active notes on this channel
                     int noteCount = 0;
                     for (auto& v : m_voices) {
                         if (v.active && v.channel == ch) noteCount++;
@@ -1384,24 +1389,25 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
                 }
             }
             float chorusMix = (chorusWeight > 0.0f) ? chorusSum / chorusWeight : 0.0f;
-            // Also factor in SF2 voice sends
             float sf2ChorusSum = 0.0f;
             int sf2ChorusCount = 0;
             for (auto& v : m_voices) {
-                if (v.active && v.chorusSend > 0.0f) {
+                if (v.active && v.chorusSend > 0.0f && m_channels[v.channel].bank != 128) {
                     sf2ChorusSum += v.chorusSend / 100.0f;
                     sf2ChorusCount++;
                 }
             }
             if (sf2ChorusCount > 0) {
                 float sf2Chorus = std::min(sf2ChorusSum / (float)sf2ChorusCount, 1.0f);
-                chorusMix = std::max(chorusMix, sf2Chorus * 0.3f); // SF2 sends at 30% to avoid over-wetting
+                chorusMix = std::max(chorusMix, sf2Chorus * 0.3f);
             }
             if (chorusMix > 0.001f) m_chorus.process(segL, segR, len, chorusMix * 127.0f);
 
+            // Delay (melody only)
             float delaySum = 0.0f;
             int delayCount = 0;
             for (int ch = 0; ch < 16; ch++) {
+                if (m_channels[ch].bank == 128) continue;
                 int send = m_channels[ch].delay;
                 send = std::max(send, expr.getValueAtTick(expr.sysPartDelaySend[ch], segTick, 0));
                 if (send > 0) {
@@ -1430,11 +1436,41 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
 
             // このセグメントを処理
             if (segEnd > segStart) {
-                std::vector<float> segL(segEnd - segStart, 0.0f);
-                std::vector<float> segR(segEnd - segStart, 0.0f);
-                processBlock(segL, segR, segEnd - segStart);
-                applyFxSegment(segL.data(), segR.data(), segEnd - segStart, segEnd);
-                for (int i = 0; i < segEnd - segStart; i++) {
+                int segLen = segEnd - segStart;
+                std::vector<float> segL(segLen, 0.0f), segR(segLen, 0.0f);
+                std::vector<float> drumL(segLen, 0.0f), drumR(segLen, 0.0f);
+
+                // Check if any drum voices are active
+                bool hasDrumActive = false;
+                for (auto& v : m_voices) {
+                    if (v.active && m_channels[v.channel].bank == 128) { hasDrumActive = true; break; }
+                }
+
+                if (hasDrumActive) {
+                    // Pass 1: render drums only into separate buffers
+                    processBlock(drumL, drumR, segLen, true);
+                    // Pass 2: render full mix (melody + drums)
+                    processBlock(segL, segR, segLen, false);
+                    // Subtract drum contribution from full mix to isolate melody
+                    for (int i = 0; i < segLen; i++) {
+                        segL[i] -= drumL[i];
+                        segR[i] -= drumR[i];
+                    }
+                    // Apply FX to melody only (reverb/chorus/delay skip drum channels)
+                    applyFxSegment(segL.data(), segR.data(), segLen, segEnd,
+                                   drumL.data(), drumR.data());
+                    // Add dry drums back
+                    for (int i = 0; i < segLen; i++) {
+                        segL[i] += drumL[i];
+                        segR[i] += drumR[i];
+                    }
+                } else {
+                    // No drums: render full mix and apply FX normally
+                    processBlock(segL, segR, segLen);
+                    applyFxSegment(segL.data(), segR.data(), segLen, segEnd,
+                                   nullptr, nullptr);
+                }
+                for (int i = 0; i < segLen; i++) {
                     bl[segStart + i] = segL[i];
                     br[segStart + i] = segR[i];
                 }

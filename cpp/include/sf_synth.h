@@ -173,7 +173,7 @@ private:
     void buildPresetZones(int channel);
     bool resolveNote(int channel, int note, int velocity, ResolvedZone& out);
     void startVoice(const ResolvedZone& zone, int channel, int note, int velocity);
-    void processBlock(std::vector<float>& left, std::vector<float>& right, int count);
+    void processBlock(std::vector<float>& left, std::vector<float>& right, int count, bool drumsOnly = false);
     void processVoice(SF2Voice& v, float* left, float* right, int count);
 
     double getEffectivePitchBend(int channel);

@@ -10,6 +10,9 @@ cpp/soundfonts/
 # Output WAV files
 output/
 
+# Documentation
+doc/
+
 # Temp files
 /tmp/
 *.tmp
