@@ -11,6 +11,8 @@ make linux        # Linux
 make              # macOS
 ```
 
+開発時: コード修正後は `make -C cpp` でビルドを実行すること。
+
 ## 使い方
 
 ```bash
