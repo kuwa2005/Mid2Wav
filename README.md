@@ -16,6 +16,42 @@ make              # macOS
 - リポジトリルートから: `make -C cpp`
 - `cpp/` ディレクトリ内から: `make`（Linux は `make linux`）
 
+### Windows 用 exe（Mid2Wav.exe）
+
+`cpp/Makefile` の `windows` ターゲットで、MinGW-w64 による **Linux/WSL からのクロスコンパイル** を想定しています（`x86_64-w64-mingw32-g++`、`-static` リンク）。
+
+**前提（WSL / Debian・Ubuntu など）**
+
+```bash
+sudo apt install mingw-w64
+```
+
+**ビルド**
+
+```bash
+cd cpp
+make windows          # 成果物: cpp/Mid2Wav.exe
+make both             # Linux 版 (Mid2Wav) と Windows 版を両方
+```
+
+リポジトリルートから: `make -C cpp windows`
+
+配布用にまとめる場合は、実行ファイルと `soundfonts/` を同じフォルダに置く（`dist/` にコピーする運用でも可。`--sf2 auto` は exe 横の `soundfonts/` を参照）。
+
+**Windows 上でネイティブビルド（MSYS2 など）**
+
+MinGW-w64 の `g++`（C++17）が使える環境で `cpp/` に入り、クロス用コンパイラ名が PATH に無い場合は次のように上書きできます。
+
+```bash
+cd cpp
+make windows WIN_CXX=g++
+```
+
+（MSYS2 の UCRT64 / MINGW64 ターミナルで `pacman -S mingw-w64-ucrt-x86_64-gcc` 等を入れたうえで実行。）
+
+クリーン: `make clean`（`.win.o` と `Mid2Wav.exe` も削除）
+
+
 ## 使い方
 
 ```bash
