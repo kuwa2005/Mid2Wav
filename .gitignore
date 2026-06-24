@@ -6,6 +6,10 @@ cpp/Mid2Wav
 cpp/Mid2Wav.exe
 cpp/Mid2Wav_dbg
 
+# Test artifacts
+cpp/test/*.o
+cpp/test/test_all
+
 # Distribution
 dist/
 
