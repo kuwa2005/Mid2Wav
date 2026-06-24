@@ -46,6 +46,8 @@ Mid2Wav -i midi_folder/ -o wav_folder/
 | `--no-mix` | 最終ミックス（合成ステレオWAV）をスキップし、チャンネル別WAVのみ出力 | ミックスON |
 | `--csv` | バッチ処理ログをCSVファイルに出力 | 出力なし |
 | `--analyze`, `--analysis` | MIDI解析のみ（WAV変換なし） | 変換実行 |
+| `--verbose` | 詳細な進捗・設定情報を表示 | オフ |
+| `--debug` | デバッグ出力を表示（`--verbose`も有効） | オフ |
 | `--help`, `-h` | ヘルプを表示して終了 | — |
 
 ### --device オプション

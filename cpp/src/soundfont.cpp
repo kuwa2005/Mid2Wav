@@ -1,4 +1,5 @@
 #include "soundfont.h"
+#include "log.h"
 #include <fstream>
 #include <iostream>
 #include <cstring>
@@ -6,7 +7,7 @@
 bool SoundFont::load(const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
-        std::cerr << "[SF2] Cannot open: " << path << std::endl;
+        LOG_ERROR() << "[SF2] Cannot open: " << path;
         return false;
     }
 
@@ -21,7 +22,7 @@ bool SoundFont::load(const std::string& path) {
 
     // RIFF ヘッダチェック
     if (fileSize < 12 || memcmp(data.data(), "RIFF", 4) != 0 || memcmp(data.data() + 8, "sfbk", 4) != 0) {
-        std::cerr << "[SF2] Not a valid SF2 file" << std::endl;
+        LOG_ERROR() << "[SF2] Not a valid SF2 file";
         return false;
     }
     pos = 12;
@@ -34,7 +35,7 @@ bool SoundFont::load(const std::string& path) {
         pos += 8;
 
         if (pos + chunkSize > fileSize) {
-            std::cerr << "[SF2] Truncated chunk: " << chunkId << std::endl;
+            LOG_ERROR() << "[SF2] Truncated chunk: " << chunkId;
             break;
         }
 
@@ -55,10 +56,10 @@ bool SoundFont::load(const std::string& path) {
         if (chunkSize % 2 != 0) pos++; // パディング
     }
 
-    std::cout << "[SF2] Loaded: " << m_name << std::endl;
-    std::cout << "[SF2] Presets: " << m_presets.size() << ", Instruments: " << m_instruments.size()
-              << ", Samples: " << m_samples.size() << std::endl;
-    std::cout << "[SF2] Sample data: " << m_sampleData.size() * 2 << " bytes" << std::endl;
+    LOG_INFO() << "[SF2] Loaded: " << m_name;
+    LOG_INFO() << "[SF2] Presets: " << m_presets.size() << ", Instruments: " << m_instruments.size()
+              << ", Samples: " << m_samples.size();
+    LOG_INFO() << "[SF2] Sample data: " << m_sampleData.size() * 2 << " bytes";
 
     return true;
 }

@@ -3,6 +3,7 @@
 #include "wav_writer.h"
 #include "soundfont.h"
 #include "sf_synth.h"
+#include "log.h"
 #include <iostream>
 #include <filesystem>
 #include <chrono>
@@ -134,7 +135,7 @@ void BatchLogger::saveLog() {
           << "," << e.processingTimeMs << "\n";
     }
     f.close();
-    std::cout << "[INFO] Log saved: " << m_logFile << std::endl;
+    LOG_INFO() << "[INFO] Log saved: " << m_logFile;
 }
 
 void BatchLogger::printSummary() {
@@ -144,12 +145,12 @@ void BatchLogger::printSummary() {
         if (e.status == "success") success++;
         else failed++;
     }
-    std::cout << "\n=== Summary ===" << std::endl;
-    std::cout << "  Total: " << total << ", Success: " << success << ", Failed: " << failed << std::endl;
-    std::cout << "  Success rate: " << (total > 0 ? (double)success / total * 100 : 0) << "%" << std::endl;
+    LOG_INFO() << "\n=== Summary ===";
+    LOG_INFO() << "  Total: " << total << ", Success: " << success << ", Failed: " << failed;
+    LOG_INFO() << "  Success rate: " << (total > 0 ? (double)success / total * 100 : 0) << "%";
     if (failed > 0) {
-        std::cout << "\n  Failed files:" << std::endl;
-        for (auto& e : m_entries) if (e.status == "fail") std::cout << "    " << e.inputFile << ": " << e.failReason << std::endl;
+        LOG_PROGRESS() << "\n  Failed files:";
+        for (auto& e : m_entries) if (e.status == "fail") LOG_PROGRESS() << "    " << e.inputFile << ": " << e.failReason;
     }
 }
 
@@ -168,8 +169,8 @@ std::string formatAnalysisText(const std::vector<TrackInfo>& tracks, const MidiF
 int runConverter(const ConvertOptions& opts) {
     auto startTime = std::chrono::steady_clock::now();
 
-    std::cout << "[INFO] Input: " << opts.inputPath << std::endl;
-    std::cout << "[INFO] Output: " << opts.outputPath << std::endl;
+    LOG_INFO() << "[INFO] Input: " << opts.inputPath;
+    LOG_INFO() << "[INFO] Output: " << opts.outputPath;
 
     fs::create_directories(opts.outputPath);
 
@@ -179,20 +180,20 @@ int runConverter(const ConvertOptions& opts) {
         std::string found = findBestSoundFont();
         if (!found.empty()) {
             sf2Path = found;
-            std::cout << "[INFO] Auto-selected SoundFont: " << fs::path(found).filename().string() << std::endl;
+            LOG_INFO() << "[INFO] Auto-selected SoundFont: " << fs::path(found).filename().string();
         } else {
-            std::cerr << "[WARN] No SoundFont files found in soundfonts/ directory" << std::endl;
+            LOG_WARN() << "[WARN] No SoundFont files found in soundfonts/ directory";
         }
     } else {
         if (!fs::exists(sf2Path)) {
             std::string found = findBestSoundFont();
             if (!found.empty()) {
                 sf2Path = found;
-                std::cout << "[INFO] Default not found, auto-selected: " << fs::path(found).filename().string() << std::endl;
+                LOG_INFO() << "[INFO] Default not found, auto-selected: " << fs::path(found).filename().string();
             }
         }
     }
-    std::cout << "[INFO] SoundFont: " << sf2Path << std::endl;
+    LOG_INFO() << "[INFO] SoundFont: " << sf2Path;
 
     std::vector<std::string> midiFiles;
     if (fs::is_regular_file(opts.inputPath)) {
@@ -207,8 +208,8 @@ int runConverter(const ConvertOptions& opts) {
         }
     }
 
-    if (midiFiles.empty()) { std::cerr << "[ERROR] No MIDI files found" << std::endl; return 1; }
-    std::cout << "[INFO] Found " << midiFiles.size() << " MIDI files" << std::endl;
+    if (midiFiles.empty()) { LOG_ERROR() << "[ERROR] No MIDI files found"; return 1; }
+    LOG_INFO() << "[INFO] Found " << midiFiles.size() << " MIDI files";
 
     // SoundFont読み込み
     SoundFont sf2;
@@ -217,14 +218,14 @@ int runConverter(const ConvertOptions& opts) {
         if (fs::exists(sf2Path)) {
             if (sf2.load(sf2Path)) {
                 sf2Loaded = true;
-                std::cout << "[INFO] SoundFont loaded successfully" << std::endl;
+                LOG_INFO() << "[INFO] SoundFont loaded successfully";
             } else {
-                std::cerr << "[WARN] Failed to load SoundFont, using fallback mode" << std::endl;
+                LOG_WARN() << "[WARN] Failed to load SoundFont, using fallback mode";
             }
         } else {
-            std::cerr << "[WARN] SoundFont not found: " << sf2Path << std::endl;
-            std::cerr << "[INFO] Using fallback mode (sine waves)" << std::endl;
-            std::cerr << "[INFO] For better quality, place a GM SoundFont in soundfonts/" << std::endl;
+            LOG_WARN() << "[WARN] SoundFont not found: " << sf2Path;
+            LOG_WARN() << "[INFO] Using fallback mode (sine waves)";
+            LOG_WARN() << "[INFO] For better quality, place a GM SoundFont in soundfonts/";
         }
     }
 
@@ -234,7 +235,7 @@ int runConverter(const ConvertOptions& opts) {
     for (size_t idx = 0; idx < midiFiles.size(); idx++) {
         auto& midiPath = midiFiles[idx];
         std::string fileName = fs::path(midiPath).stem().string();
-        std::cout << "\n[" << (idx + 1) << "/" << midiFiles.size() << "] " << fileName << std::endl;
+        LOG_PROGRESS() << "\n[" << (idx + 1) << "/" << midiFiles.size() << "] " << fileName;
 
         BatchLogEntry log;
         log.inputFile = midiPath;
@@ -242,9 +243,9 @@ int runConverter(const ConvertOptions& opts) {
 
         try {
             MidiFile midi;
-            std::cout << "  [Debug] Loading MIDI: " << midiPath << std::endl;
+            LOG_DEBUG() << "  [Debug] Loading MIDI: " << midiPath;
             if (!midi.load(midiPath)) {
-                std::cerr << "  [ERROR] Failed to load MIDI" << std::endl;
+                LOG_ERROR() << "  [ERROR] Failed to load MIDI";
                 log.status = "fail"; log.failReason = "Failed to load MIDI";
                 if (logger) logger->addEntry(log);
                 failed++;
@@ -252,7 +253,7 @@ int runConverter(const ConvertOptions& opts) {
             }
 
             auto tracks = midi.analyzeTracks();
-            std::cout << "  [Debug] Tracks analyzed, notes=" << midi.notes().size() << std::endl;
+            LOG_DEBUG() << "  [Debug] Tracks analyzed, notes=" << midi.notes().size();
             log.notes = midi.notes().size();
             log.duration = midi.tickToSeconds(midi.notes().empty() ? 0 : midi.notes().back().endTime);
 
@@ -262,12 +263,12 @@ int runConverter(const ConvertOptions& opts) {
                 runOpts.device = detectDevice(midi);
             }
 
-            std::cout << "  [Analysis] " << tracks.size() << " tracks, " << log.notes << " notes, "
+            LOG_INFO() << "  [Analysis] " << tracks.size() << " tracks, " << log.notes << " notes, "
                       << std::fixed << std::setprecision(1) << log.duration << " sec"
-                      << "  Device: " << deviceName(runOpts.device) << std::endl;
+                      << "  Device: " << deviceName(runOpts.device);
 
             if (opts.analyzeOnly) {
-                std::cout << formatAnalysisText(tracks, midi);
+                LOG_PROGRESS() << formatAnalysisText(tracks, midi);
                 log.status = "success";
                 if (logger) logger->addEntry(log);
                 success++;
@@ -307,12 +308,12 @@ int runConverter(const ConvertOptions& opts) {
             log.status = "success";
             log.processingTimeMs = std::chrono::duration_cast<std::chrono::milliseconds>(procEnd - procStart).count();
 
-            std::cout << "  [Done] " << outPath << " (" << log.processingTimeMs << "ms)" << std::endl;
+            LOG_PROGRESS() << "  [Done] " << outPath << " (" << log.processingTimeMs << "ms)";
             if (logger) logger->addEntry(log);
             success++;
 
         } catch (const std::exception& e) {
-            std::cerr << "  [ERROR] " << e.what() << std::endl;
+            LOG_ERROR() << "  [ERROR] " << e.what();
             log.status = "fail"; log.failReason = e.what();
             if (logger) logger->addEntry(log);
             failed++;
@@ -326,6 +327,6 @@ int runConverter(const ConvertOptions& opts) {
     }
 
     auto endTime = std::chrono::steady_clock::now();
-    std::cout << "\n[INFO] Total time: " << std::chrono::duration<double>(endTime - startTime).count() << " sec" << std::endl;
+    LOG_INFO() << "\n[INFO] Total time: " << std::chrono::duration<double>(endTime - startTime).count() << " sec";
     return 0;
 }

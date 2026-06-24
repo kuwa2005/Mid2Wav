@@ -1,4 +1,5 @@
 #include "converter.h"
+#include "log.h"
 #include <iostream>
 #include <string>
 #include <sstream>
@@ -29,6 +30,8 @@ void printUsage() {
               << "  --no-normalize            Skip peak normalization\n"
               << "  --no-mix                  Skip final mix (output channel WAVs only)\n"
               << "  --analyze                 Analyze only (no convert)\n"
+              << "  --verbose                 Show detailed progress info\n"
+              << "  --debug                   Show debug output (implies --verbose)\n"
               << "  --help, -h                Show this help\n";
 }
 
@@ -83,8 +86,12 @@ int main(int argc, char* argv[]) {
             else opts.deviceAuto = true;
         }
         else if (a == "--analyze" || a == "--analysis") opts.analyzeOnly = true;
+        else if (a == "--verbose") opts.verbose = true;
+        else if (a == "--debug") { opts.debug = true; opts.verbose = true; }
         else if (a == "--help" || a == "-h") { printUsage(); return 0; }
     }
+
+    Log::configure(opts.verbose, opts.debug);
 
     // --sf2未指定時はauto
     if (!opts.sf2Auto && opts.sf2Path == "soundfonts/GM.sf2") {

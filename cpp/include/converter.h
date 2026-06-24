@@ -20,6 +20,8 @@ struct ConvertOptions {
     double gainDb = 0.0; // Master gain in dB
     std::vector<int> channelFilter; // empty = all channels
     bool noMix = false; // skip final mix (only channel WAVs)
+    bool verbose = false;
+    bool debug = false;
 };
 
 struct BatchLogEntry {

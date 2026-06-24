@@ -1,6 +1,7 @@
 #include "sf_synth.h"
 #include "converter.h"
 #include "wav_writer.h"
+#include "log.h"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -40,7 +41,7 @@ bool SFSynthesizer::init(const SoundFont& sf2, int sampleRate) {
     m_reverb.init(sampleRate);
     m_chorus.init(sampleRate);
     m_delay.init(sampleRate);
-    std::cout << "[Synth] Initialized (dynamic voices, " << sampleRate << " Hz)" << std::endl;
+    LOG_INFO() << "[Synth] Initialized (dynamic voices, " << sampleRate << " Hz)";
     return true;
 }
 
@@ -51,7 +52,7 @@ bool SFSynthesizer::initFallback(int sampleRate) {
     m_channels.resize(16);
     m_voices.clear();
     m_voices.reserve(1024);
-    std::cout << "[Synth] Fallback mode (sine waves, " << sampleRate << " Hz)" << std::endl;
+    LOG_INFO() << "[Synth] Fallback mode (sine waves, " << sampleRate << " Hz)";
     return true;
 }
 
@@ -409,7 +410,7 @@ void SFSynthesizer::buildPresetZones(int channel) {
         }
     }
     if (zoneCount > 0) {
-        std::cout << "    [Zones] ch=" << channel << " " << zoneCount << " zones built" << std::endl;
+        LOG_INFO() << "    [Zones] ch=" << channel << " " << zoneCount << " zones built";
     }
 }
 
@@ -446,10 +447,10 @@ bool SFSynthesizer::resolveNote(int channel, int note, int velocity, ResolvedZon
     }
 
     if (found && m_channels[channel].program == 0 && note == 60) {
-        std::cout << "    [Resolve] ch=" << channel << " note=" << note << " vel=" << velocity
+        LOG_INFO() << "    [Resolve] ch=" << channel << " note=" << note << " vel=" << velocity
                   << " -> sample[" << out.sampleIndex << "] rootKey=" << out.rootKey
                   << " key=" << out.keyLow << "-" << out.keyHigh
-                  << " vel=" << out.velLow << "-" << out.velHigh << std::endl;
+                  << " vel=" << out.velLow << "-" << out.velHigh;
     }
     return found;
 }
@@ -672,8 +673,8 @@ void SFSynthesizer::noteOn(int channel, int note, int velocity) {
             }
         }
         if (!isDrum && m_channels[channel].program == 0 && note == 60) {
-            std::cout << "    [Resolve] ch=" << channel << " note=" << note
-                      << " vel=" << velocity << " -> " << zones.size() << " zones" << std::endl;
+            LOG_INFO() << "    [Resolve] ch=" << channel << " note=" << note
+                      << " vel=" << velocity << " -> " << zones.size() << " zones";
         }
     }
 }
@@ -702,11 +703,11 @@ void SFSynthesizer::programChange(int channel, int program, int bank) {
         int pIdx = m_sf2->findPreset(fullBank, program);
         if (pIdx < 0) pIdx = m_sf2->findPreset(bank, program);
         if (pIdx >= 0) {
-            std::cout << "    [Preset] ch=" << channel << " bank=" << bank << " LSB=" << m_channels[channel].bankLSB << " prog=" << program 
-                      << " -> preset[" << pIdx << "] \"" << m_sf2->presets()[pIdx].name << "\"" << std::endl;
+            LOG_INFO() << "    [Preset] ch=" << channel << " bank=" << bank << " LSB=" << m_channels[channel].bankLSB << " prog=" << program 
+                      << " -> preset[" << pIdx << "] \"" << m_sf2->presets()[pIdx].name << "\"";
         } else {
-            std::cout << "    [Preset] ch=" << channel << " bank=" << bank << " LSB=" << m_channels[channel].bankLSB << " prog=" << program 
-                      << " -> NOT FOUND" << std::endl;
+            LOG_INFO() << "    [Preset] ch=" << channel << " bank=" << bank << " LSB=" << m_channels[channel].bankLSB << " prog=" << program 
+                      << " -> NOT FOUND";
         }
         buildPresetZones(channel);
     }
@@ -1193,15 +1194,15 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
     std::vector<float> left(totalSamples, 0.0f);
     std::vector<float> right(totalSamples, 0.0f);
 
-    std::cout << "  [Render] " << notes.size() << " notes, " << (int)totalSec << " sec..." << std::flush;
+    LOG_INFO() << "  [Render] " << notes.size() << " notes, " << (int)totalSec << " sec...";
 
     // Reset
     m_voices.clear();
-    std::cout << "  [Debug] Voices reset" << std::endl;
+    LOG_DEBUG() << "  [Debug] Voices reset";
 
     // 各チャンネルの初期program/bankを決定
     const auto& expr = midi.expression();
-    std::cout << "  [Debug] Starting channel init" << std::endl;
+    LOG_DEBUG() << "  [Debug] Starting channel init";
     for (int ch = 0; ch < 16; ch++) {
         int64_t firstNoteTick = INT64_MAX;
         for (auto& n : notes) {
@@ -1274,18 +1275,18 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
             controlChange(ch, cc, v);
         }
     }
-    std::cout << "  [Debug] Channel init done" << std::endl;
+    LOG_DEBUG() << "  [Debug] Channel init done";
 
     // チャンネル情報表示
-    std::cout << "  [Channels] " << std::endl;
+    LOG_INFO() << "  [Channels] ";
     for (int ch = 0; ch < 16; ch++) {
         int noteCount = 0;
         for (auto& n : notes) if (n.channel == ch) noteCount++;
         if (noteCount == 0) continue;
         const char* drumTag = (ch == 9) ? " [PERC]" : "";
-        std::cout << "    Ch " << (ch + 1) << ": program=" << m_channels[ch].program
+        LOG_INFO() << "    Ch " << (ch + 1) << ": program=" << m_channels[ch].program
                   << " bank=" << m_channels[ch].bank
-                  << " notes=" << noteCount << drumTag << std::endl;
+                  << " notes=" << noteCount << drumTag;
     }
 
     // Sort notes by start time
@@ -1685,13 +1686,13 @@ void SFSynthesizer::renderToWav(const std::vector<MidiNote>& notes,
         }
 
         if ((pos / BS) % 50 == 0) {
-            std::cout << "\r  [Render] " << (int)((double)pos / totalSamples * 100) << "%   " << std::flush;
+            LOG_RAW_PROGRESS() << "\r  [Render] " << (int)((double)pos / totalSamples * 100) << "%   " << std::flush;
         }
     }
-    std::cout << std::endl;
+    if (Log::enabled(LogLevel::Progress)) std::cout << std::endl;
 
     auto t1 = std::chrono::steady_clock::now();
-    std::cout << "  [Render] Done (" << std::chrono::duration<double>(t1 - t0).count() << " sec)" << std::endl;
+    LOG_PROGRESS() << "  [Render] Done (" << std::chrono::duration<double>(t1 - t0).count() << " sec)";
 
     // Normalize to peak (skip if --no-normalize)
     if (!opts.noNormalize) {
@@ -1767,7 +1768,7 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         totalSec = std::max(totalSec, t);
     }
     int totalSamples = (int)(totalSec * m_sampleRate);
-    std::cout << "    [Debug] totalSec=" << totalSec << " totalSamples=" << totalSamples << std::endl;
+    LOG_DEBUG() << "    [Debug] totalSec=" << totalSec << " totalSamples=" << totalSamples;
     const char* gmNames[] = {
         "Acoustic Grand Piano","Bright Acoustic Piano","Electric Grand Piano","Honky-tonk Piano",
         "Electric Piano 1","Electric Piano 2","Harpsichord","Clavi",
@@ -1803,8 +1804,8 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
         "Telephone Ring","Helicopter","Applause","Gunshot"
     };
 
-    std::cout << "  [Channel Split] " << usedChannels.size() << " channels, "
-              << (int)totalSec << " sec..." << std::endl;
+    LOG_INFO() << "  [Channel Split] " << usedChannels.size() << " channels, "
+              << (int)totalSec << " sec...";
 
     const auto& expr = midi.expression();
 
@@ -1880,19 +1881,19 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
             chSynth.controlChange(0, cc, v);
         }
 
-        std::cout << "    Ch " << (ch + 1) << ": program=" << chProgram
+        LOG_INFO() << "    Ch " << (ch + 1) << ": program=" << chProgram
                   << " bank=" << chBank
-                  << " notes=" << noteCount << std::endl;
+                  << " notes=" << noteCount;
 
         // チャンネル番号を0にマッピングしてレンダリング
         std::vector<MidiNote> mapped = chNotes;
         for (auto& n : mapped) n.channel = 0;
 
-        std::cout << "    [Debug] Rendering ch " << (ch + 1) << "..." << std::endl;
+        LOG_DEBUG() << "    [Debug] Rendering ch " << (ch + 1) << "...";
 
         std::vector<float> left(totalSamples, 0.0f);
         std::vector<float> right(totalSamples, 0.0f);
-        std::cout << "    [Debug] Allocated " << (totalSamples * 2 * sizeof(float) / 1024 / 1024) << "MB for ch " << (ch+1) << std::endl;
+        LOG_DEBUG() << "    [Debug] Allocated " << (totalSamples * 2 * sizeof(float) / 1024 / 1024) << "MB for ch " << (ch+1);
 
         // レンダリング
         const int BS = 1024;
@@ -2121,14 +2122,14 @@ void SFSynthesizer::renderToWavPerChannel(const std::vector<MidiNote>& notes,
 
         WavWriter::write(outPath, left, right, m_sampleRate);
 
-        std::cout << "    Ch " << (ch + 1) << ": program=" << chProgram
+        LOG_INFO() << "    Ch " << (ch + 1) << ": program=" << chProgram
                   << " bank=" << chBank
-                  << " notes=" << noteCount << " -> " << safeBaseName << "_" << chName << ".wav" << std::endl;
+                  << " notes=" << noteCount << " -> " << safeBaseName << "_" << chName << ".wav";
     }
 
     auto t1 = std::chrono::steady_clock::now();
-    std::cout << "  [Channel Split] Done (" << std::chrono::duration<double>(t1 - t0).count()
-              << " sec)" << std::endl;
+    LOG_INFO() << "  [Channel Split] Done (" << std::chrono::duration<double>(t1 - t0).count()
+              << " sec)";
 }
 
 bool SFSynthesizer::mixFromChannelWavs(const std::string& channelDir,
