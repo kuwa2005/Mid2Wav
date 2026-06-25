@@ -18,8 +18,9 @@ dist/
 soundfonts/
 cpp/soundfonts/
 
-# Output WAV files
-output/
+# Golden WAV (environment-specific, optional)
+cpp/test/fixtures/expected/*.wav
+
 
 # Documentation
 doc/

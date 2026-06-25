@@ -207,13 +207,16 @@ Mid2Wav -i input.mid -o output/ --analyze
 
 ## テスト
 
-`cpp/test/` に **32 ケース / 6 スイート** のユニットテストがあります。詳細なカバレッジ表・未テスト領域は [cpp/test/README.md](cpp/test/README.md) を参照してください。
+`cpp/test/` に **32 ケース / 6 スイート** のユニットテスト、**7 ケース** の統合テスト、**6 ケース** の音質回帰テストがあります。詳細は [cpp/test/README.md](cpp/test/README.md) を参照してください。
 
 ### 実行
 
 ```bash
 cd cpp
-make test              # 全スイート
+make test              # 全スイート（ユニット + 統合）
+make test-unit         # SF2 不要（wav / midi / fx）
+make test-integration  # フルパイプライン統合テスト
+make test-quality      # うねり・ミックス経路の音質回帰
 make test-wav          # スイート単体（下表の名前に対応）
 make test-midi
 make test-soundfont
@@ -222,21 +225,24 @@ make test-fx
 make test-converter
 ```
 
-前提: リポジトリルートに `soundfonts/TyrolandGSV30fix.sf2` を配置（git 未同梱）。
+前提: フル `test` / `test-integration` では `soundfonts/TyrolandGSV30fix.sf2` を配置（git 未同梱）。無い場合は統合のレンダリング系が SKIP され、一部ユニットが失敗します。
 
 ### スイート一覧（GitHub / CI で検証する内容）
 
 | Makefile ターゲット | スイート | 件数 | 主な検証対象 |
 |--------------------|---------|------|-------------|
+| `test-unit` | wav + midi + fx | 17 | SF2 不要のコア |
 | `test-wav` | wav | 3 | WAV 読み書き、チャンネルミックス |
 | `test-midi` | midi | 8 | SMF パース、テンポ、CC、GS SysEx、解析 |
 | `test-soundfont` | soundfont | 4 | SF2 読み込み、プリセット、エラー処理 |
 | `test-synth` | synth | 8 | シンセ描画、Ch10、ポリフォニー、CC91、フォールバック |
 | `test-fx` | fx | 6 | リバーブ / コーラス / ディレイ |
 | `test-converter` | converter | 3 | 解析出力、`runConverter`（analyze / フル変換） |
-| **`test`（全体）** | **全スイート** | **32** | 上記すべて |
+| `test-integration` | integration | 7 | フルパイプライン、チャンネル分割、ゴールデン比較 |
+| `test-quality` | quality | 6 | うねり検出、render 経路回帰、Ch10+メロディミックス |
+| **`test`（全体）** | **全スイート** | **45** | 上記すべて |
 
-成功時の目安: `=== Results: 32 passed, 0 failed ===`
+成功時の目安: `=== Results: 45 passed, 0 failed, 0 skipped ===`（SF2 配置済み環境）
 
 ## ライセンス
 

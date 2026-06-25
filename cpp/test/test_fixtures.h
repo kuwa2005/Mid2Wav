@@ -182,4 +182,41 @@ inline std::vector<uint8_t> makeCh10MelodyModeMidi() {
     return buildSmf(tb.events);
 }
 
+// Sustained note for amplitude-modulation / undulation tests (CC1=0, CC93=0).
+inline std::vector<uint8_t> makeSustainedNoteMidi(uint8_t channel = 0, uint8_t note = 60,
+                                                  uint8_t velocity = 100,
+                                                  uint32_t holdTicks = 480 * 4) {
+    TrackBuilder tb;
+    tb.cc(channel, 1, 0);
+    tb.cc(channel, 93, 0);
+    tb.programChange(channel, 0);
+    tb.noteOn(channel, note, velocity);
+    tb.noteOff(channel, note, holdTicks);
+    tb.endOfTrack();
+    return buildSmf(tb.events);
+}
+
+inline std::vector<uint8_t> makeChorusMidi(uint8_t chorusCC, uint8_t channel = 0) {
+    TrackBuilder tb;
+    tb.cc(channel, 1, 0);
+    tb.cc(channel, 93, chorusCC);
+    tb.programChange(channel, 0);
+    tb.noteOn(channel, 60, 100);
+    tb.noteOff(channel, 60, 480 * 2);
+    tb.endOfTrack();
+    return buildSmf(tb.events);
+}
+
+// Ch1 melody + Ch10 drum for full-mix regression.
+inline std::vector<uint8_t> makeDrumAndMelodyMidi() {
+    TrackBuilder tb;
+    tb.programChange(0, 0);
+    tb.noteOn(0, 60, 100);
+    tb.noteOn(9, 36, 110);
+    tb.noteOff(0, 60, 480 * 2);
+    tb.noteOff(9, 36, 480 * 2);
+    tb.endOfTrack();
+    return buildSmf(tb.events);
+}
+
 } // namespace midi_fixtures
