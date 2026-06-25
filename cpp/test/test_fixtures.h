@@ -185,9 +185,10 @@ inline std::vector<uint8_t> makeCh10MelodyModeMidi() {
 // Sustained note for amplitude-modulation / undulation tests (CC1=0, CC93=0).
 inline std::vector<uint8_t> makeSustainedNoteMidi(uint8_t channel = 0, uint8_t note = 60,
                                                   uint8_t velocity = 100,
-                                                  uint32_t holdTicks = 480 * 4) {
+                                                  uint32_t holdTicks = 480 * 4,
+                                                  uint8_t cc1 = 0) {
     TrackBuilder tb;
-    tb.cc(channel, 1, 0);
+    tb.cc(channel, 1, cc1);
     tb.cc(channel, 93, 0);
     tb.programChange(channel, 0);
     tb.noteOn(channel, note, velocity);

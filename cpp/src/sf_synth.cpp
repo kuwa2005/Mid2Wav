@@ -852,17 +852,6 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
     double chPan = (m_channels[v.channel].pan - 64) / 64.0;
     v.pan = std::clamp(v.zonePan + chPan, -1.0, 1.0);
 
-    // Update LFO phase for this voice (SF2 VibLFO with delay)
-    double lfoValue = 0.0;
-    if (v.vibratoDepth > 0.0 && !isDrumChannel) {
-        if (v.vibLFODelayCount > 0) {
-            v.vibLFODelayCount--;
-        } else {
-            v.vibratoPhase += 2.0 * M_PI * v.vibLFOFrequency / m_sampleRate;
-            if (v.vibratoPhase > 2.0 * M_PI) v.vibratoPhase -= 2.0 * M_PI;
-            lfoValue = std::sin(v.vibratoPhase);
-        }
-    }
     for (int i = 0; i < count; i++) {
         if (!v.active) break;
 
@@ -1011,6 +1000,18 @@ void SFSynthesizer::processVoice(SF2Voice& v, float* left, float* right, int cou
                 double s3r = getSample(rIdx + 2, v.sampleStartR, v.sampleEndR);
                 sampleR = s0r * lanczos(rFrac + 1.0) + s1r * lanczos(rFrac)
                         + s2r * lanczos(rFrac - 1.0) + s3r * lanczos(rFrac - 2.0);
+            }
+        }
+
+        // VibLFO: per-sample (CC1 depth + SF2 vibLfoToPitch); block-level stepping caused warble
+        double lfoValue = 0.0;
+        if (!isDrumChannel && (v.vibratoDepth > 0.0 || v.vibLfoToPitch != 0.0)) {
+            if (v.vibLFODelayCount > 0) {
+                v.vibLFODelayCount--;
+            } else {
+                v.vibratoPhase += 2.0 * M_PI * v.vibLFOFrequency / m_sampleRate;
+                if (v.vibratoPhase > 2.0 * M_PI) v.vibratoPhase -= 2.0 * M_PI;
+                lfoValue = std::sin(v.vibratoPhase);
             }
         }
 

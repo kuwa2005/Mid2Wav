@@ -10,10 +10,11 @@ void registerSynthTests();
 void registerFxTests();
 void registerConverterTests();
 void registerIntegrationTests();
+void registerQualityTests();
 
 static void printUsage() {
     std::cout << "Usage: test_runner [suite ...]\n"
-              << "Suites: wav, midi, soundfont, synth, fx, converter, integration, unit, all\n"
+              << "Suites: wav, midi, soundfont, synth, fx, converter, integration, quality, unit, all\n"
               << "No arguments runs all suites.\n";
 }
 
@@ -25,6 +26,7 @@ int main(int argc, char** argv) {
     registerFxTests();
     registerConverterTests();
     registerIntegrationTests();
+    registerQualityTests();
 
     std::vector<std::string> filters;
     for (int i = 1; i < argc; i++) {

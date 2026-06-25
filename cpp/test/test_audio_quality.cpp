@@ -13,7 +13,11 @@ using namespace audio_analysis;
 
 // ── Thresholds (documented in test/README.md) ─────────────────────
 // Sustained piano with CC1=0: detrended ripple CV (warble on top of decay).
-static constexpr float kMaxDetrendedCv = 0.22f;
+static constexpr float kMaxDetrendedCv = 0.18f;
+
+// CC1=80 sustained: vibrato should alter waveform but block-stepping warble must stay bounded.
+static constexpr float kMaxCC1HeavyDetrendedCv = 0.32f;
+static constexpr float kMaxCC1HeavyCorrelation = 0.995f;
 
 // renderToWav vs per-channel+mix: paths differ in FX but should correlate.
 static constexpr float kPathMinCorrelation = 0.80f;
@@ -391,8 +395,57 @@ static void testQualityNoDoubleFxEnergy(TestContext& ctx) {
     OK(ctx);
 }
 
+static void testQualityCC1HeavyBounded(TestContext& ctx) {
+    TEST(ctx, "CC1-heavy sustain vibrato without block-step warble");
+
+    if (!loadTestSf2(ctx)) { SKIP(ctx, "TyrolandGSV30fix.sf2 not found (place under soundfonts/)"); return; }
+    auto* sf2 = loadTestSf2(ctx);
+
+    auto renderSustain = [&](uint8_t cc1, const std::string& wavPath) -> bool {
+        auto data = midi_fixtures::makeSustainedNoteMidi(0, 60, 100, 480 * 4, cc1);
+        std::string midPath = wavPath + ".mid";
+        MidiFile midi;
+        if (!loadMidiFromData(data, midPath, midi)) return false;
+        SFSynthesizer synth;
+        if (!synth.init(*sf2, 48000)) return false;
+        bool ok = renderDirect(synth, midi, wavPath);
+        fs::remove(midPath);
+        return ok;
+    };
+
+    std::string dryPath = "/tmp/mid2wav_quality_cc1_dry.wav";
+    std::string wetPath = "/tmp/mid2wav_quality_cc1_heavy.wav";
+    ASSERT_TRUE(ctx, renderSustain(0, dryPath), "CC1=0 render failed");
+    ASSERT_TRUE(ctx, renderSustain(80, wetPath), "CC1=80 render failed");
+
+    std::vector<float> dryL, dryR, wetL, wetR;
+    int sr = 0;
+    ASSERT_TRUE(ctx, readWavStereo(dryPath, dryL, dryR, sr), "read CC1=0 failed");
+    ASSERT_TRUE(ctx, readWavStereo(wetPath, wetL, wetR, sr), "read CC1=80 failed");
+
+    float wetCv = sustainDetrendedCv(wetL, wetR, sr);
+    if (wetCv > kMaxCC1HeavyDetrendedCv) {
+        FAIL(ctx, std::string("CC1=80 excessive warble (detrended CV=") +
+            std::to_string(wetCv) + ", max=" + std::to_string(kMaxCC1HeavyDetrendedCv) +
+            ") — possible block-level vibrato LFO");
+        return;
+    }
+
+    auto sim = compareWavSimilarity(dryL, dryR, wetL, wetR);
+    if (sim.correlation > kMaxCC1HeavyCorrelation) {
+        FAIL(ctx, std::string("CC1=80 render too similar to CC1=0 (corr=") +
+            std::to_string(sim.correlation) + ") — vibrato not applied");
+        return;
+    }
+
+    fs::remove(dryPath);
+    fs::remove(wetPath);
+    OK(ctx);
+}
+
 static void runQualitySuite(TestContext& ctx) {
     testQualitySustainedLowUndulation(ctx);
+    testQualityCC1HeavyBounded(ctx);
     testQualityRenderPathSimilarity(ctx);
     testQualityConverterUsesDirectRender(ctx);
     testQualityChorusNotScaled127(ctx);
